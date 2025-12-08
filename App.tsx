@@ -16,6 +16,7 @@ import {
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import CommandPalette from './components/CommandPalette';
+import ToastSystem, { useToasts } from './components/ToastSystem';
 import { generateSmartSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
@@ -98,7 +99,14 @@ function App() {
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+
+  // Toast system
+  const toast = useToasts();
+
+  // Flex operator editing state
+  const [editingFlexName, setEditingFlexName] = useState<string | null>(null);
+  const [flexNameInput, setFlexNameInput] = useState('');
+
   // App State
   const [operators, setOperators] = useState<Operator[]>(MOCK_OPERATORS);
   const [tasks, setTasks] = useState<TaskType[]>(MOCK_TASKS);
@@ -296,6 +304,52 @@ function App() {
         ? { ...t, requiredOperators: Math.max(1, Math.min(5, count)) }
         : t
     ));
+  };
+
+  // Flex Operator Management Functions
+  const handleAddFlexOperator = () => {
+    const flexCount = operators.filter(op => op.type === 'Flex').length;
+    const newFlexOp: Operator = {
+      id: `flex-${Date.now()}`,
+      name: `Flex Op ${flexCount + 1}`,
+      type: 'Flex',
+      status: 'Active',
+      skills: ['Exceptions/Station'],
+      availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true }
+    };
+    setOperators(prev => [...prev, newFlexOp]);
+    toast.success('Flex operator added', `${newFlexOp.name} has been added to the schedule`);
+  };
+
+  const handleRemoveFlexOperator = (opId: string) => {
+    const op = operators.find(o => o.id === opId);
+    if (!op) return;
+
+    // Remove from schedule assignments too
+    const newSchedule = { ...currentWeek };
+    newSchedule.days.forEach(day => {
+      if (day.assignments[opId]) {
+        delete day.assignments[opId];
+      }
+    });
+    setCurrentWeek(newSchedule);
+
+    setOperators(prev => prev.filter(o => o.id !== opId));
+    toast.info('Flex operator removed', `${op.name} has been removed from the schedule`);
+  };
+
+  const handleRenameFlexOperator = (opId: string, newName: string) => {
+    if (!newName.trim()) return;
+    setOperators(prev => prev.map(op =>
+      op.id === opId ? { ...op, name: newName.trim() } : op
+    ));
+    setEditingFlexName(null);
+    toast.success('Operator renamed', `Flex operator renamed to "${newName.trim()}"`);
+  };
+
+  const startEditingFlexName = (op: Operator) => {
+    setEditingFlexName(op.id);
+    setFlexNameInput(op.name);
   };
 
   const handleAssignmentChange = (dayIndex: number, opId: string, taskId: string | null) => {
@@ -557,6 +611,29 @@ function App() {
           const entry = logScheduleGenerated(getWeekLabel(newSchedule), assignmentCount);
           setActivityLog(prev => [entry, ...prev]);
         }
+
+        // Show toast notification for schedule generation result
+        if (result.warnings.length > 0) {
+          toast.warning(
+            `Schedule Generated with ${result.warnings.length} Warning${result.warnings.length > 1 ? 's' : ''}`,
+            'Review the warnings below to ensure schedule quality',
+            {
+              duration: 6000,
+              action: {
+                label: 'View Details',
+                onClick: () => {
+                  const warningPanel = document.querySelector('[data-warning-panel]');
+                  warningPanel?.scrollIntoView({ behavior: 'smooth' });
+                }
+              }
+            }
+          );
+        } else if (assignmentCount > 0) {
+          toast.success(
+            'Schedule Generated Successfully',
+            `${assignmentCount} assignment${assignmentCount > 1 ? 's' : ''} made with no conflicts`
+          );
+        }
       }
     } catch (e) {
       console.error("Scheduling error:", e);
@@ -613,6 +690,15 @@ function App() {
   const getTaskName = (taskId: string | null) => {
     if (!taskId) return '';
     return tasks.find(t => t.id === taskId)?.name || '';
+  };
+
+  // Helper to check if a cell has a warning
+  const getCellWarnings = (operatorId: string, dayIndex: number): ScheduleWarning[] => {
+    const dayName = (['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as WeekDay[])[dayIndex];
+    return scheduleWarnings.filter(w =>
+      (w.operatorId === operatorId && w.day === dayName) ||
+      (w.day === dayName && !w.operatorId && w.type === 'understaffed')
+    );
   };
 
   // --- Components ---
@@ -1793,7 +1879,7 @@ function App() {
 
       {/* Conflict Warnings Panel */}
       {scheduleWarnings.length > 0 && (
-        <div className={`rounded-xl border p-4 no-print ${theme === 'Midnight' ? 'bg-amber-900/20 border-amber-900/50' : 'bg-amber-50 border-amber-200'}`}>
+        <div data-warning-panel className={`rounded-xl border p-4 no-print ${theme === 'Midnight' ? 'bg-amber-900/20 border-amber-900/50' : 'bg-amber-50 border-amber-200'}`}>
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle className={`h-5 w-5 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
             <h3 className={`font-bold ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-800'}`}>
@@ -1952,9 +2038,11 @@ function App() {
                     const assignment = day.assignments[op.id];
                     const taskId = assignment?.taskId || null;
                     const isSelected = selectedCell?.opId === op.id && selectedCell?.dayIndex === dayIdx;
-                    
+
                     const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
                     const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
+                    const cellWarnings = getCellWarnings(op.id, dayIdx);
+                    const hasWarning = cellWarnings.length > 0;
 
                     return (
                       <td
@@ -1963,6 +2051,8 @@ function App() {
                           isDragging ? 'opacity-50' : ''
                         } ${
                           isDropTarget ? (theme === 'Midnight' ? 'bg-indigo-900/20' : 'bg-blue-50') : ''
+                        } ${
+                          hasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
                         }`}
                         onDragOver={(e) => {
                           e.preventDefault();
@@ -2080,6 +2170,19 @@ function App() {
                             )}
                           </button>
                         )}
+                        {/* Warning Indicator */}
+                        {hasWarning && !isSelected && (
+                          <div
+                            className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
+                              theme === 'Midnight'
+                                ? 'bg-amber-500/20 text-amber-400'
+                                : 'bg-amber-100 text-amber-600'
+                            }`}
+                            title={cellWarnings.map(w => w.message).join('\n')}
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                          </div>
+                        )}
                         {isSelected && (
                           <div 
                             className="fixed inset-0 z-40 bg-transparent" 
@@ -2095,17 +2198,31 @@ function App() {
                 </tr>
               ))}
 
-              {/* Flex Separator */}
-              {operators.some(op => op.type === 'Flex') && (
-                <tr>
-                   <td colSpan={6} className={`py-3 px-4 sticky left-0 z-10 backdrop-blur-sm border-t border-b ${theme === 'Midnight' ? 'bg-slate-900/80 border-slate-800' : theme === 'Minimal' ? 'bg-[#fffefb]/80 border-stone-100' : 'bg-gray-50/80 border-gray-100'}`}>
-                      <div className="flex items-center gap-2">
-                         <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded ${theme === 'Midnight' ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-100 text-purple-600'}`}>Flex Operators</span>
-                         <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
-                      </div>
-                   </td>
-                </tr>
-              )}
+              {/* Flex Separator - Always show to allow adding flex operators */}
+              <tr>
+                 <td colSpan={6} className={`py-3 px-4 sticky left-0 z-10 backdrop-blur-sm border-t border-b ${theme === 'Midnight' ? 'bg-slate-900/80 border-slate-800' : theme === 'Minimal' ? 'bg-[#fffefb]/80 border-stone-100' : 'bg-gray-50/80 border-gray-100'}`}>
+                    <div className="flex items-center gap-2">
+                       <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded ${theme === 'Midnight' ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-100 text-purple-600'}`}>Flex Operators</span>
+                       <span className={`text-xs ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                         ({operators.filter(op => op.type === 'Flex').length})
+                       </span>
+                       <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
+                       {!currentWeek.locked && (
+                         <button
+                           onClick={handleAddFlexOperator}
+                           className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
+                             theme === 'Midnight'
+                               ? 'bg-purple-900/30 text-purple-400 hover:bg-purple-900/50'
+                               : 'bg-purple-100 text-purple-600 hover:bg-purple-200'
+                           }`}
+                         >
+                           <Plus className="h-3 w-3" />
+                           Add Flex
+                         </button>
+                       )}
+                    </div>
+                 </td>
+              </tr>
 
               {/* Flex Operators */}
               {operators.filter(op => op.type === 'Flex').map(op => (
@@ -2115,13 +2232,58 @@ function App() {
                       <div className={`h-9 w-9 rounded-full flex items-center justify-center border shadow-inner shrink-0 ${theme === 'Midnight' ? 'bg-purple-900/30 border-purple-800 text-purple-300' : 'bg-purple-100 border-purple-200 text-purple-600'}`}>
                          <span className="text-sm font-bold">{op.name.charAt(0)}</span>
                       </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className={`text-sm font-medium leading-none truncate ${styles.text}`}>{op.name}</span>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        {editingFlexName === op.id ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={flexNameInput}
+                            onChange={(e) => setFlexNameInput(e.target.value)}
+                            onBlur={() => handleRenameFlexOperator(op.id, flexNameInput)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleRenameFlexOperator(op.id, flexNameInput);
+                              } else if (e.key === 'Escape') {
+                                setEditingFlexName(null);
+                              }
+                            }}
+                            className={`text-sm font-medium leading-none px-2 py-1 rounded-md border outline-none w-full max-w-[120px] ${
+                              theme === 'Midnight'
+                                ? 'bg-slate-800 border-purple-600 text-slate-200 focus:border-purple-400'
+                                : 'bg-white border-purple-300 text-gray-800 focus:border-purple-500'
+                            }`}
+                          />
+                        ) : (
+                          <button
+                            onClick={() => !currentWeek.locked && startEditingFlexName(op)}
+                            disabled={currentWeek.locked}
+                            className={`text-sm font-medium leading-none truncate text-left ${styles.text} ${
+                              !currentWeek.locked ? 'hover:text-purple-600 cursor-pointer' : 'cursor-default'
+                            }`}
+                            title={currentWeek.locked ? op.name : 'Click to rename'}
+                          >
+                            {op.name}
+                          </button>
+                        )}
                         <div className="flex items-center gap-1 mt-1">
                           <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Flex</span>
                           <span className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>{op.skills.length} skills</span>
                         </div>
                       </div>
+                      {/* Delete button - only visible on hover when not locked */}
+                      {!currentWeek.locked && (
+                        <button
+                          onClick={() => handleRemoveFlexOperator(op.id)}
+                          className={`opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all ${
+                            theme === 'Midnight'
+                              ? 'hover:bg-red-900/30 text-slate-500 hover:text-red-400'
+                              : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
+                          }`}
+                          title="Remove flex operator"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                   {currentWeek.days.map((day, dayIdx) => {
@@ -2131,6 +2293,8 @@ function App() {
                     const isSelected = selectedCell?.opId === op.id && selectedCell?.dayIndex === dayIdx;
                     const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
                     const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
+                    const flexCellWarnings = getCellWarnings(op.id, dayIdx);
+                    const flexHasWarning = flexCellWarnings.length > 0;
 
                     return (
                       <td
@@ -2139,6 +2303,8 @@ function App() {
                           isDragging ? 'opacity-50' : ''
                         } ${
                           isDropTarget ? (theme === 'Midnight' ? 'bg-purple-900/20' : 'bg-purple-50') : ''
+                        } ${
+                          flexHasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
                         }`}
                         onDragOver={(e) => {
                           e.preventDefault();
@@ -2212,6 +2378,19 @@ function App() {
                           >
                             {task ? task.name : '-'}
                           </button>
+                        )}
+                        {/* Warning Indicator for Flex */}
+                        {flexHasWarning && !isSelected && (
+                          <div
+                            className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
+                              theme === 'Midnight'
+                                ? 'bg-amber-500/20 text-amber-400'
+                                : 'bg-amber-100 text-amber-600'
+                            }`}
+                            title={flexCellWarnings.map(w => w.message).join('\n')}
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                          </div>
                         )}
                         {isSelected && (
                           <div
@@ -2478,6 +2657,14 @@ function App() {
         }}
         onGenerateSchedule={handleAutoSchedule}
         onExport={() => setShowExportModal(true)}
+      />
+
+      {/* Toast Notification System */}
+      <ToastSystem
+        toasts={toast.toasts}
+        onDismiss={toast.dismissToast}
+        position="bottom-right"
+        theme={theme}
       />
     </div>
   );

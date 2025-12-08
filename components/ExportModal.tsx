@@ -3,6 +3,7 @@ import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2, Palett
 import { WeeklySchedule, Operator, TaskType } from '../types';
 import {
   exportToPng,
+  exportToPngClassic,
   exportToPdf,
   shareToWhatsApp,
   downloadFile,
@@ -38,6 +39,7 @@ const ExportModal: React.FC<ExportModalProps> = ({
   const [exportSuccess, setExportSuccess] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfTheme, setPdfTheme] = useState<ExportTheme>('modern');
+  const [pngTheme, setPngTheme] = useState<ExportTheme>('modern');
 
   useEffect(() => {
     if (isOpen) {
@@ -84,7 +86,12 @@ const ExportModal: React.FC<ExportModalProps> = ({
     try {
       switch (format) {
         case 'png': {
-          const dataUrl = await exportToPng(scheduleRef.current, week);
+          let dataUrl: string;
+          if (pngTheme === 'classic') {
+            dataUrl = await exportToPngClassic(week, operators, tasks);
+          } else {
+            dataUrl = await exportToPng(scheduleRef.current, week);
+          }
           downloadFile(dataUrl, generateFilename(week, 'png'));
           break;
         }
@@ -183,18 +190,18 @@ const ExportModal: React.FC<ExportModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-4">
-          {/* PDF Theme Selector */}
+          {/* Theme Selector - applies to both PNG and PDF */}
           <div className={`p-4 rounded-xl border ${isDark ? 'border-slate-800 bg-slate-800/30' : 'border-gray-100 bg-gray-50'}`}>
             <div className="flex items-center gap-2 mb-3">
               <Palette className={`h-4 w-4 ${isDark ? 'text-slate-400' : 'text-gray-500'}`} />
-              <span className={`text-sm font-medium ${isDark ? 'text-slate-300' : 'text-gray-700'}`}>PDF Theme</span>
+              <span className={`text-sm font-medium ${isDark ? 'text-slate-300' : 'text-gray-700'}`}>Export Theme</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setPdfTheme('modern')}
+                onClick={() => { setPngTheme('modern'); setPdfTheme('modern'); }}
                 className={`p-3 rounded-lg border-2 transition-all text-left ${
-                  pdfTheme === 'modern'
+                  pngTheme === 'modern'
                     ? isDark
                       ? 'border-blue-500 bg-blue-500/10'
                       : 'border-blue-500 bg-blue-50'
@@ -208,9 +215,9 @@ const ExportModal: React.FC<ExportModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setPdfTheme('classic')}
+                onClick={() => { setPngTheme('classic'); setPdfTheme('classic'); }}
                 className={`p-3 rounded-lg border-2 transition-all text-left ${
-                  pdfTheme === 'classic'
+                  pngTheme === 'classic'
                     ? isDark
                       ? 'border-green-500 bg-green-500/10'
                       : 'border-green-600 bg-green-50'

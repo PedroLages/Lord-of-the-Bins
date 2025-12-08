@@ -12,25 +12,25 @@ export interface ExportOptions {
   theme?: ExportTheme;
 }
 
-// Task colors for classic theme (matching the original schedule)
+// Task colors for classic theme (matching the original Excel schedule exactly)
 const CLASSIC_TASK_COLORS: Record<string, { bg: string; text: string }> = {
-  'Troubleshooter': { bg: '#00B0F0', text: '#000000' },
-  'Troubleshooter AD': { bg: '#FF6600', text: '#FFFFFF' },
-  'Quality checker': { bg: '#808080', text: '#FFFFFF' },
-  'MONO counter': { bg: '#FFFF00', text: '#000000' },
-  'Filler': { bg: '#92D050', text: '#000000' },
-  'LVB Sheet': { bg: '#FFFF00', text: '#000000' },
-  'Decanting': { bg: '#92D050', text: '#000000' },
-  'Platform': { bg: '#FF66FF', text: '#000000' },
-  'EST': { bg: '#9966FF', text: '#FFFFFF' },
-  'Exceptions': { bg: '#FF0000', text: '#FFFFFF' },
-  'Exceptions/Station': { bg: '#C0C0C0', text: '#000000' },
+  'Troubleshooter': { bg: '#0ea5e9', text: '#FFFFFF' },     // Sky blue
+  'Troubleshooter AD': { bg: '#f97316', text: '#FFFFFF' }, // Orange
+  'Quality checker': { bg: '#374151', text: '#FFFFFF' },   // Dark gray
+  'MONO counter': { bg: '#fbbf24', text: '#000000' },      // Amber
+  'Filler': { bg: '#84cc16', text: '#000000' },            // Lime
+  'LVB Sheet': { bg: '#fbbf24', text: '#000000' },         // Amber
+  'Decanting': { bg: '#86efac', text: '#000000' },         // Light green
+  'Platform': { bg: '#f472b6', text: '#000000' },          // Pink
+  'EST': { bg: '#a78bfa', text: '#FFFFFF' },               // Purple
+  'Exceptions': { bg: '#ef4444', text: '#FFFFFF' },        // Red
+  'Exceptions/Station': { bg: '#f87171', text: '#FFFFFF' },// Light red
   'Training': { bg: '#00B0F0', text: '#000000' },
   'Trainer': { bg: '#00B0F0', text: '#000000' },
-  'Process': { bg: '#90EE90', text: '#000000' },
-  'People': { bg: '#90EE90', text: '#000000' },
-  'Off process': { bg: '#C0C0C0', text: '#000000' },
-  'Process/AD': { bg: '#90EE90', text: '#000000' },
+  'Process': { bg: '#dcfce7', text: '#000000' },           // Pale green
+  'People': { bg: '#dcfce7', text: '#000000' },            // Pale green
+  'Off process': { bg: '#e5e7eb', text: '#000000' },       // Gray
+  'Process/AD': { bg: '#dcfce7', text: '#000000' },        // Pale green
 };
 
 // Dutch day abbreviations
@@ -38,6 +38,7 @@ const DUTCH_DAYS = ['Ma', 'Di', 'Wo', 'Do', 'Vr'];
 
 /**
  * Export the schedule grid as a PNG image
+ * Only captures the table element, not the surrounding toolbar/buttons
  */
 export async function exportToPng(
   element: HTMLElement,
@@ -46,11 +47,16 @@ export async function exportToPng(
 ): Promise<string> {
   const quality = options.quality || 1;
 
+  // Find the actual table element within the container
+  // This ensures we only capture the schedule table, not toolbar buttons
+  const tableElement = element.querySelector('table') as HTMLElement;
+  const targetElement = tableElement || element;
+
   // Apply export-specific styles
-  element.classList.add('exporting');
+  targetElement.classList.add('exporting');
 
   try {
-    const dataUrl = await toPng(element, {
+    const dataUrl = await toPng(targetElement, {
       quality,
       backgroundColor: '#ffffff',
       pixelRatio: 2, // Higher resolution for crisp output
@@ -67,8 +73,190 @@ export async function exportToPng(
 
     return dataUrl;
   } finally {
-    element.classList.remove('exporting');
+    targetElement.classList.remove('exporting');
   }
+}
+
+/**
+ * Export the schedule in the classic "Operational Plan 4M" format as a PNG image
+ * Uses Canvas to render the Excel-style layout
+ */
+export async function exportToPngClassic(
+  week: WeeklySchedule,
+  operators: Operator[],
+  tasks: TaskType[]
+): Promise<string> {
+  // Canvas dimensions (A4 landscape at 150 DPI for good quality)
+  const scale = 2; // For retina displays
+  const canvasWidth = 1190 * scale; // ~A4 landscape width
+  const canvasHeight = 842 * scale; // ~A4 landscape height
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d')!;
+
+  // Scale for high DPI
+  ctx.scale(scale, scale);
+  const width = canvasWidth / scale;
+  const height = canvasHeight / scale;
+
+  // Fill white background
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, width, height);
+
+  // Layout configuration
+  const margin = 20;
+  const nameColWidth = 100;
+  const dayColWidth = (width - margin * 2 - nameColWidth) / 5;
+
+  // Count operators by type
+  const regularOps = operators.filter(op => op.type === 'Regular' && op.status === 'Active');
+  const flexOps = operators.filter(op => op.type === 'Flex' && op.status === 'Active');
+  const coordinators = operators.filter(op => op.type === 'Coordinator' && op.status === 'Active');
+  const totalOperators = regularOps.length + flexOps.length + coordinators.length;
+
+  // Calculate available height for operators
+  const fixedHeaderHeight = 110;
+  const sectionSpacing = 6; // Small spacing between sections (no labels like original Excel)
+  const numSections = (regularOps.length > 0 ? 1 : 0) + (flexOps.length > 0 ? 1 : 0) + (coordinators.length > 0 ? 1 : 0);
+  const totalSectionSpacingHeight = Math.max(0, numSections - 1) * sectionSpacing; // Spacing between sections only
+  const bottomMargin = margin;
+
+  const availableHeight = height - margin - fixedHeaderHeight - totalSectionSpacingHeight - bottomMargin;
+  let rowHeight = totalOperators > 0 ? availableHeight / totalOperators : 24;
+  rowHeight = Math.max(18, Math.min(28, rowHeight));
+
+  let y = margin;
+  const headerRowHeight = 22;
+
+  // Helper function to draw filled rect with stroke
+  const drawCell = (x: number, y: number, w: number, h: number, fillColor: string, strokeColor = '#C8C8C8') => {
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, h);
+  };
+
+  // Helper to center text in cell
+  const drawCenteredText = (text: string, x: number, y: number, w: number, h: number, font: string, color: string) => {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x + w / 2, y + h / 2);
+  };
+
+  // === MAIN HEADER - Green Banner ===
+  drawCell(margin, y, width - margin * 2, 30, '#228B22', '#228B22');
+  ctx.font = 'bold 18px Helvetica';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('OPERATIONAL PLAN 4M', width / 2, y + 15);
+  y += 30;
+
+  // === WEEKLY PLANNING SUBHEADER ===
+  drawCell(margin, y, width - margin * 2, 22, '#F0F0F0');
+  drawCenteredText('WEEKLY PLANNING', margin, y, width - margin * 2, 22, 'bold 14px Helvetica', '#000000');
+  y += 22;
+
+  // === WEEK NUMBER ROW ===
+  drawCell(margin, y, nameColWidth, headerRowHeight, '#FFFFFF');
+  drawCenteredText('Week', margin, y, nameColWidth, headerRowHeight, 'bold 12px Helvetica', '#000000');
+
+  drawCell(margin + nameColWidth, y, dayColWidth * 5, headerRowHeight, '#FFFFC8');
+  drawCenteredText(`WEEK ${week.weekNumber} - ${week.year}`, margin + nameColWidth, y, dayColWidth * 5, headerRowHeight, 'bold 14px Helvetica', '#000000');
+  y += headerRowHeight;
+
+  // === DAY ROW ===
+  const dayColors = ['#FFC0CB', '#FFFF99', '#ADD8E6', '#90EE90', '#DDA0DD'];
+  drawCell(margin, y, nameColWidth, headerRowHeight, '#FFFFFF');
+  drawCenteredText('Day', margin, y, nameColWidth, headerRowHeight, 'bold 12px Helvetica', '#000000');
+
+  DUTCH_DAYS.forEach((day, i) => {
+    drawCell(margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, dayColors[i]);
+    drawCenteredText(day, margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, 'bold 12px Helvetica', '#000000');
+  });
+  y += headerRowHeight;
+
+  // === DATE ROW ===
+  drawCell(margin, y, nameColWidth, headerRowHeight, '#FFFFFF');
+  drawCenteredText('Date', margin, y, nameColWidth, headerRowHeight, '11px Helvetica', '#505050');
+
+  week.days.forEach((d, i) => {
+    const date = new Date(d.date);
+    const dateStr = `${date.getDate()}-${date.toLocaleString('nl', { month: 'short' })}`;
+    drawCell(margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, '#FFFFFF');
+    drawCenteredText(dateStr, margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, '11px Helvetica', '#505050');
+  });
+  y += headerRowHeight;
+
+  // Add section spacing (no labels like original Excel)
+  const addSectionSpacing = () => {
+    y += sectionSpacing;
+  };
+
+  // Render operator rows
+  const renderOperatorRows = (ops: Operator[]) => {
+    const fontSize = Math.max(9, Math.min(12, rowHeight * 0.45));
+    const taskFontSize = Math.max(8, Math.min(10, rowHeight * 0.4));
+
+    ops.forEach(op => {
+      // Operator name cell - gray background like original Excel
+      drawCell(margin, y, nameColWidth, rowHeight, '#E0E0E0');
+      ctx.font = `bold ${fontSize}px Helvetica`;
+      ctx.fillStyle = '#000000';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const displayOpName = op.name.length > 14 ? op.name.substring(0, 13) + '..' : op.name;
+      ctx.fillText(displayOpName, margin + 6, y + rowHeight / 2);
+
+      // Day cells
+      week.days.forEach((day, dayIdx) => {
+        const assignment = day.assignments[op.id];
+        const taskId = assignment?.taskId;
+        const task = taskId ? tasks.find(t => t.id === taskId) : null;
+        const taskName = task?.name || '';
+
+        const colors = CLASSIC_TASK_COLORS[taskName] || { bg: '#FFFFFF', text: '#000000' };
+        drawCell(margin + nameColWidth + dayIdx * dayColWidth, y, dayColWidth, rowHeight, colors.bg);
+
+        if (taskName) {
+          ctx.font = `${taskFontSize}px Helvetica`;
+          ctx.fillStyle = colors.text;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const maxChars = Math.floor(dayColWidth / 7);
+          const displayName = taskName.length > maxChars ? taskName.substring(0, maxChars - 2) + '..' : taskName;
+          ctx.fillText(displayName, margin + nameColWidth + dayIdx * dayColWidth + dayColWidth / 2, y + rowHeight / 2);
+        }
+      });
+
+      y += rowHeight;
+    });
+  };
+
+  // Render regular operators (no section labels like original Excel)
+  if (regularOps.length > 0) {
+    renderOperatorRows(regularOps);
+  }
+
+  // Render flex operators with spacing separator
+  if (flexOps.length > 0) {
+    if (regularOps.length > 0) addSectionSpacing();
+    renderOperatorRows(flexOps);
+  }
+
+  // Render coordinators with spacing separator
+  if (coordinators.length > 0) {
+    if (regularOps.length > 0 || flexOps.length > 0) addSectionSpacing();
+    renderOperatorRows(coordinators);
+  }
+
+  // Convert canvas to data URL
+  return canvas.toDataURL('image/png');
 }
 
 /**
@@ -164,6 +352,8 @@ export async function exportToPdf(
 
 /**
  * Export the schedule in the classic "Operational Plan 4M" format
+ * Matches the original Excel format exactly with task legend
+ * Dynamically calculates row height to fit all content on one page
  */
 function exportToPdfClassic(
   week: WeeklySchedule,
@@ -180,95 +370,137 @@ function exportToPdfClassic(
   const pageHeight = pdf.internal.pageSize.getHeight();
 
   // Layout configuration
-  const margin = 10;
-  const nameColWidth = 35;
+  const margin = 6;
+  const nameColWidth = 28;
   const dayColWidth = (pageWidth - margin * 2 - nameColWidth) / 5;
-  const headerHeight = 25;
-  const rowHeight = 7;
+
+  // Count operators by type
+  const regularOps = operators.filter(op => op.type === 'Regular' && op.status === 'Active');
+  const flexOps = operators.filter(op => op.type === 'Flex' && op.status === 'Active');
+  const coordinators = operators.filter(op => op.type === 'Coordinator' && op.status === 'Active');
+  const totalOperators = regularOps.length + flexOps.length + coordinators.length;
+
+  // Calculate available height for operators
+  // Fixed heights: main header(10) + subheader(7) + week row(6) + day row(6) + date row(6) = 35mm
+  // Section spacing: 2mm between sections (no labels like original Excel)
+  const fixedHeaderHeight = 35;
+  const sectionSpacing = 2;
+  const numSections = (regularOps.length > 0 ? 1 : 0) + (flexOps.length > 0 ? 1 : 0) + (coordinators.length > 0 ? 1 : 0);
+  const totalSectionSpacingHeight = Math.max(0, numSections - 1) * sectionSpacing;
+  const bottomMargin = margin;
+
+  // Available height for operator rows (no legend anymore)
+  const availableHeight = pageHeight - margin - fixedHeaderHeight - totalSectionSpacingHeight - bottomMargin;
+
+  // Calculate row height (minimum 4.5mm, maximum 7mm for readability)
+  let rowHeight = totalOperators > 0 ? availableHeight / totalOperators : 6;
+  rowHeight = Math.max(4.5, Math.min(7, rowHeight));
+
+  // Font size scales with row height
+  const nameFontSize = Math.max(6, Math.min(9, rowHeight * 1.2));
+  const taskFontSize = Math.max(5, Math.min(7, rowHeight * 0.95));
 
   let y = margin;
 
-  // === MAIN HEADER ===
-  pdf.setFillColor(0, 128, 0); // Green header
-  pdf.rect(margin, y, pageWidth - margin * 2, 12, 'F');
+  // Header row height (fixed)
+  const headerRowHeight = 6;
+
+  // === MAIN HEADER - Green Banner ===
+  pdf.setFillColor(34, 139, 34); // Forest green
+  pdf.rect(margin, y, pageWidth - margin * 2, 9, 'F');
   pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(16);
+  pdf.setFontSize(12);
   pdf.setFont('helvetica', 'bold');
-  pdf.text('OPERATIONAL PLAN 4M', pageWidth / 2, y + 8, { align: 'center' });
-  y += 12;
+  pdf.text('OPERATIONAL PLAN 4M', pageWidth / 2, y + 6, { align: 'center' });
+  y += 9;
 
   // === WEEKLY PLANNING SUBHEADER ===
-  pdf.setFillColor(255, 255, 255);
+  pdf.setFillColor(240, 240, 240);
+  pdf.rect(margin, y, pageWidth - margin * 2, 6, 'F');
+  pdf.setDrawColor(200, 200, 200);
+  pdf.rect(margin, y, pageWidth - margin * 2, 6, 'D');
   pdf.setTextColor(0, 0, 0);
-  pdf.setFontSize(12);
-  pdf.text('WEEKLY PLANNING', pageWidth / 2, y + 6, { align: 'center' });
-  y += 10;
+  pdf.setFontSize(9);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('WEEKLY PLANNING', pageWidth / 2, y + 4.2, { align: 'center' });
+  y += 6;
 
-  // === WEEK/DAY/DATE HEADER ROWS ===
-  const headerRows = [
-    { label: 'Week', values: [`WEEK ${week.weekNumber}`], span: true },
-    { label: 'Day', values: DUTCH_DAYS, span: false },
-    { label: 'Date', values: week.days.map(d => {
-      const date = new Date(d.date);
-      return `${date.getDate()}-${date.toLocaleString('en', { month: 'short' }).toLowerCase()}`;
-    }), span: false }
-  ];
+  // === WEEK NUMBER ROW ===
+  pdf.setFillColor(255, 255, 255);
+  pdf.setDrawColor(180, 180, 180);
+  pdf.rect(margin, y, nameColWidth, headerRowHeight, 'FD');
+  pdf.setFontSize(7);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(0, 0, 0);
+  pdf.text('Week', margin + nameColWidth / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
 
-  headerRows.forEach((row, rowIdx) => {
-    // Name column
-    pdf.setFillColor(255, 255, 255);
-    pdf.rect(margin, y, nameColWidth, rowHeight, 'FD');
-    pdf.setFontSize(9);
+  // Week number spans all day columns
+  pdf.setFillColor(255, 255, 200); // Light yellow highlight
+  pdf.rect(margin + nameColWidth, y, dayColWidth * 5, headerRowHeight, 'FD');
+  pdf.setFontSize(8);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text(`WEEK ${week.weekNumber} - ${week.year}`, margin + nameColWidth + (dayColWidth * 5) / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
+  y += headerRowHeight;
+
+  // === DAY ROW - Colored backgrounds ===
+  pdf.setFillColor(255, 255, 255);
+  pdf.rect(margin, y, nameColWidth, headerRowHeight, 'FD');
+  pdf.setFontSize(7);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('Day', margin + nameColWidth / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
+
+  DUTCH_DAYS.forEach((day, i) => {
+    const bgColor = getHeaderDayColor(i);
+    pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+    pdf.rect(margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, 'FD');
     pdf.setTextColor(0, 0, 0);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(row.label, margin + nameColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
-
-    // Day columns
-    if (row.span) {
-      // Span across all days
-      pdf.setFillColor(255, 255, 255);
-      pdf.rect(margin + nameColWidth, y, dayColWidth * 5, rowHeight, 'FD');
-      pdf.setFont('helvetica', 'bold');
-      pdf.text(row.values[0], margin + nameColWidth + (dayColWidth * 5) / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
-    } else {
-      row.values.forEach((val, i) => {
-        const bgColor = rowIdx === 1 ? getHeaderDayColor(i) : [255, 255, 255];
-        pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
-        pdf.rect(margin + nameColWidth + i * dayColWidth, y, dayColWidth, rowHeight, 'FD');
-        pdf.setTextColor(0, 0, 0);
-        pdf.setFont('helvetica', rowIdx === 1 ? 'bold' : 'normal');
-        pdf.text(val, margin + nameColWidth + i * dayColWidth + dayColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
-      });
-    }
-    y += rowHeight;
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(day, margin + nameColWidth + i * dayColWidth + dayColWidth / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
   });
+  y += headerRowHeight;
 
-  y += 2; // Small gap after header
+  // === DATE ROW ===
+  pdf.setFillColor(255, 255, 255);
+  pdf.rect(margin, y, nameColWidth, headerRowHeight, 'FD');
+  pdf.setFontSize(7);
+  pdf.setFont('helvetica', 'normal');
+  pdf.text('Date', margin + nameColWidth / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
+
+  week.days.forEach((d, i) => {
+    const date = new Date(d.date);
+    const dateStr = `${date.getDate()}-${date.toLocaleString('nl', { month: 'short' })}`;
+    pdf.setFillColor(255, 255, 255);
+    pdf.rect(margin + nameColWidth + i * dayColWidth, y, dayColWidth, headerRowHeight, 'FD');
+    pdf.setTextColor(80, 80, 80);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text(dateStr, margin + nameColWidth + i * dayColWidth + dayColWidth / 2, y + headerRowHeight / 2 + 1.2, { align: 'center' });
+  });
+  y += headerRowHeight;
 
   // === OPERATOR SECTIONS ===
-  const regularOps = operators.filter(op => op.type === 'Regular');
-  const flexOps = operators.filter(op => op.type === 'Flex');
-  const coordinators = operators.filter(op => op.type === 'Coordinator');
+  // Add section spacing (no labels like original Excel)
+  const addSectionSpacing = () => {
+    y += sectionSpacing;
+  };
 
-  // Render regular operators
-  renderOperatorSection(pdf, regularOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
-  y += regularOps.length * rowHeight + 3;
-
-  // Render flex operators with separator
-  if (flexOps.length > 0) {
-    pdf.setFillColor(200, 200, 200);
-    pdf.rect(margin, y, pageWidth - margin * 2, 1, 'F');
-    y += 3;
-    renderOperatorSection(pdf, flexOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
-    y += flexOps.length * rowHeight + 3;
+  // Render regular operators (no section labels like original Excel)
+  if (regularOps.length > 0) {
+    renderOperatorSection(pdf, regularOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y, nameFontSize, taskFontSize);
+    y += regularOps.length * rowHeight;
   }
 
-  // Render coordinators with separator
+  // Render flex operators with spacing separator
+  if (flexOps.length > 0) {
+    if (regularOps.length > 0) addSectionSpacing();
+    renderOperatorSection(pdf, flexOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y, nameFontSize, taskFontSize);
+    y += flexOps.length * rowHeight;
+  }
+
+  // Render coordinators with spacing separator
   if (coordinators.length > 0) {
-    pdf.setFillColor(200, 200, 200);
-    pdf.rect(margin, y, pageWidth - margin * 2, 1, 'F');
-    y += 3;
-    renderOperatorSection(pdf, coordinators, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
+    if (regularOps.length > 0 || flexOps.length > 0) addSectionSpacing();
+    renderOperatorSection(pdf, coordinators, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y, nameFontSize, taskFontSize);
+    y += coordinators.length * rowHeight;
   }
 
   return pdf.output('blob');
@@ -300,19 +532,26 @@ function renderOperatorSection(
   nameColWidth: number,
   dayColWidth: number,
   rowHeight: number,
-  startY: number
+  startY: number,
+  nameFontSize: number = 8,
+  taskFontSize: number = 6
 ): void {
   let y = startY;
 
+  // Calculate text vertical position based on row height
+  const textYOffset = rowHeight / 2 + (rowHeight * 0.15);
+
   operators.forEach(op => {
-    // Operator name cell
-    pdf.setFillColor(255, 255, 255);
+    // Operator name cell - gray background like original Excel
+    pdf.setFillColor(224, 224, 224); // #E0E0E0
     pdf.setDrawColor(200, 200, 200);
     pdf.rect(margin, y, nameColWidth, rowHeight, 'FD');
     pdf.setTextColor(0, 0, 0);
-    pdf.setFontSize(9);
+    pdf.setFontSize(nameFontSize);
     pdf.setFont('helvetica', 'bold');
-    pdf.text(op.name, margin + 2, y + rowHeight / 2 + 1.5);
+    // Truncate name if needed
+    const displayOpName = op.name.length > 12 ? op.name.substring(0, 11) + '..' : op.name;
+    pdf.text(displayOpName, margin + 1.5, y + textYOffset);
 
     // Day cells
     week.days.forEach((day, dayIdx) => {
@@ -332,11 +571,12 @@ function renderOperatorSection(
 
       if (taskName) {
         pdf.setTextColor(textColor.r, textColor.g, textColor.b);
-        pdf.setFontSize(7);
+        pdf.setFontSize(taskFontSize);
         pdf.setFont('helvetica', 'normal');
-        // Truncate long task names
-        const displayName = taskName.length > 18 ? taskName.substring(0, 16) + '...' : taskName;
-        pdf.text(displayName, margin + nameColWidth + dayIdx * dayColWidth + dayColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
+        // Truncate long task names based on available width
+        const maxChars = Math.floor(dayColWidth / 2);
+        const displayName = taskName.length > maxChars ? taskName.substring(0, maxChars - 2) + '..' : taskName;
+        pdf.text(displayName, margin + nameColWidth + dayIdx * dayColWidth + dayColWidth / 2, y + textYOffset, { align: 'center' });
       }
     });
 
