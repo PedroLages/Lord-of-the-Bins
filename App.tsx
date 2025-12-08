@@ -151,6 +151,7 @@ function App() {
   // Scheduling State
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedCell, setSelectedCell] = useState<{opId: string, dayIndex: number} | null>(null);
+  const [dragInfo, setDragInfo] = useState<{opId: string; dayIndex: number; taskId: string | null} | null>(null);
 
   // Modal State
   const [isOperatorModalOpen, setIsOperatorModalOpen] = useState(false);
@@ -330,6 +331,73 @@ function App() {
     }
 
     // Run validation after assignment change
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
+    setScheduleWarnings(warnings);
+  };
+
+  // Handle drag-and-drop swap between cells
+  const handleDragDrop = (targetOpId: string, targetDayIndex: number) => {
+    if (!dragInfo || currentWeek.locked) return;
+
+    // Don't do anything if dropping on the same cell
+    if (dragInfo.opId === targetOpId && dragInfo.dayIndex === targetDayIndex) {
+      setDragInfo(null);
+      return;
+    }
+
+    const newSchedule = { ...currentWeek };
+    const sourceDay = newSchedule.days[dragInfo.dayIndex];
+    const targetDay = newSchedule.days[targetDayIndex];
+
+    // Get the tasks being swapped
+    const sourceTaskId = sourceDay.assignments[dragInfo.opId]?.taskId || null;
+    const targetTaskId = targetDay.assignments[targetOpId]?.taskId || null;
+
+    // Perform the swap
+    if (!sourceDay.assignments[dragInfo.opId]) {
+      sourceDay.assignments[dragInfo.opId] = { taskId: null, locked: false };
+    }
+    if (!targetDay.assignments[targetOpId]) {
+      targetDay.assignments[targetOpId] = { taskId: null, locked: false };
+    }
+
+    // Swap tasks
+    sourceDay.assignments[dragInfo.opId] = {
+      ...sourceDay.assignments[dragInfo.opId],
+      taskId: targetTaskId,
+      locked: true
+    };
+    targetDay.assignments[targetOpId] = {
+      ...targetDay.assignments[targetOpId],
+      taskId: sourceTaskId,
+      locked: true
+    };
+
+    setCurrentWeek(newSchedule);
+    setDragInfo(null);
+
+    // Log the swap
+    const sourceOp = operators.find(o => o.id === dragInfo.opId);
+    const targetOp = operators.find(o => o.id === targetOpId);
+    const sourceTaskName = sourceTaskId ? tasks.find(t => t.id === sourceTaskId)?.name : 'Off';
+    const targetTaskName = targetTaskId ? tasks.find(t => t.id === targetTaskId)?.name : 'Off';
+
+    if (sourceOp && targetOp) {
+      const entry = logAssignmentChange(
+        `${sourceOp.name} ↔ ${targetOp.name}`,
+        `${sourceDay.dayOfWeek}${targetDayIndex !== dragInfo.dayIndex ? `-${targetDay.dayOfWeek}` : ''}`,
+        `Swapped: ${sourceTaskName}`,
+        targetTaskName || null
+      );
+      setActivityLog(prev => [entry, ...prev]);
+    }
+
+    // Run validation
     const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
     const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
     newSchedule.days.forEach((d, idx) => {
@@ -1885,8 +1953,26 @@ function App() {
                     const taskId = assignment?.taskId || null;
                     const isSelected = selectedCell?.opId === op.id && selectedCell?.dayIndex === dayIdx;
                     
+                    const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
+                    const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
+
                     return (
-                      <td key={dayIdx} className={`p-2 relative h-16 align-top ${styles.cell}`}>
+                      <td
+                        key={dayIdx}
+                        className={`p-2 relative h-16 align-top ${styles.cell} ${
+                          isDragging ? 'opacity-50' : ''
+                        } ${
+                          isDropTarget ? (theme === 'Midnight' ? 'bg-indigo-900/20' : 'bg-blue-50') : ''
+                        }`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleDragDrop(op.id, dayIdx);
+                        }}
+                      >
                         {isSelected ? (
                           // Popover Menu
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-64 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
@@ -1967,14 +2053,24 @@ function App() {
                         ) : (
                           // Task Pill
                           <button
+                            draggable={!!taskId && !currentWeek.locked}
+                            onDragStart={(e) => {
+                              if (!taskId || currentWeek.locked) {
+                                e.preventDefault();
+                                return;
+                              }
+                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => setDragInfo(null)}
                             onClick={() => setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
                             style={getTaskStyle(taskId)}
                             className={`w-full h-full min-h-[44px] rounded-lg flex flex-col items-center justify-center p-1 transition-all duration-200 border ${
-                              !taskId 
-                                ? (theme === 'Midnight' 
-                                   ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30' 
+                              !taskId
+                                ? (theme === 'Midnight'
+                                   ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30'
                                    : 'bg-white border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/30')
-                                : 'hover:brightness-95 hover:shadow-md'
+                                : 'hover:brightness-95 hover:shadow-md cursor-grab active:cursor-grabbing'
                             }`}
                           >
                             {taskId ? (
@@ -2033,9 +2129,26 @@ function App() {
                     const taskId = assignment?.taskId || null;
                     const task = taskId ? tasks.find(t => t.id === taskId) : null;
                     const isSelected = selectedCell?.opId === op.id && selectedCell?.dayIndex === dayIdx;
+                    const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
+                    const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
 
                     return (
-                      <td key={dayIdx} className={`p-2 relative h-16 align-top ${styles.cell}`}>
+                      <td
+                        key={dayIdx}
+                        className={`p-2 relative h-16 align-top ${styles.cell} ${
+                          isDragging ? 'opacity-50' : ''
+                        } ${
+                          isDropTarget ? (theme === 'Midnight' ? 'bg-purple-900/20' : 'bg-purple-50') : ''
+                        }`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleDragDrop(op.id, dayIdx);
+                        }}
+                      >
                         {isSelected ? (
                           // Simplified Popover for Flex - only shows their available tasks
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-56 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
@@ -2076,15 +2189,25 @@ function App() {
                           </div>
                         ) : (
                           <button
+                            draggable={!!task && !currentWeek.locked}
+                            onDragStart={(e) => {
+                              if (!task || currentWeek.locked) {
+                                e.preventDefault();
+                                return;
+                              }
+                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => setDragInfo(null)}
                             onClick={() => !currentWeek.locked && setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
                             disabled={currentWeek.locked}
                             className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
                               task
-                                ? 'border-transparent'
+                                ? 'border-transparent cursor-grab active:cursor-grabbing'
                                 : theme === 'Midnight'
                                 ? 'border-slate-800 hover:border-slate-700 text-slate-600'
                                 : 'border-gray-200 hover:border-gray-300 text-gray-400'
-                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
                             {task ? task.name : '-'}
@@ -2134,9 +2257,26 @@ function App() {
                     const taskId = assignment?.taskId || null;
                     const task = taskId ? tasks.find(t => t.id === taskId) : null;
                     const isSelected = selectedCell?.opId === op.id && selectedCell?.dayIndex === dayIdx;
+                    const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
+                    const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
 
                     return (
-                      <td key={dayIdx} className={`p-2 relative h-16 align-top ${styles.cell}`}>
+                      <td
+                        key={dayIdx}
+                        className={`p-2 relative h-16 align-top ${styles.cell} ${
+                          isDragging ? 'opacity-50' : ''
+                        } ${
+                          isDropTarget ? (theme === 'Midnight' ? 'bg-emerald-900/20' : 'bg-emerald-50') : ''
+                        }`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleDragDrop(op.id, dayIdx);
+                        }}
+                      >
                         {isSelected ? (
                           // Popover for Coordinator - only shows coordinator tasks
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-56 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
@@ -2177,15 +2317,25 @@ function App() {
                           </div>
                         ) : (
                           <button
+                            draggable={!!task && !currentWeek.locked}
+                            onDragStart={(e) => {
+                              if (!task || currentWeek.locked) {
+                                e.preventDefault();
+                                return;
+                              }
+                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => setDragInfo(null)}
                             onClick={() => !currentWeek.locked && setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
                             disabled={currentWeek.locked}
                             className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
                               task
-                                ? 'border-transparent'
+                                ? 'border-transparent cursor-grab active:cursor-grabbing'
                                 : theme === 'Midnight'
                                 ? 'border-slate-800 hover:border-emerald-700 text-slate-600'
                                 : 'border-gray-200 hover:border-emerald-300 text-gray-400'
-                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
                             {task ? task.name : '-'}
