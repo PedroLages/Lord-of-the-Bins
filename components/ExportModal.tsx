@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2 } from 'lucide-react';
-import { WeeklySchedule } from '../types';
+import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2, Palette } from 'lucide-react';
+import { WeeklySchedule, Operator, TaskType } from '../types';
 import {
   exportToPng,
   exportToPdf,
   shareToWhatsApp,
   downloadFile,
-  generateFilename
+  generateFilename,
+  ExportTheme
 } from '../services/exportService';
 import { getWeekLabel, getWeekRangeString } from '../services/weekUtils';
 
@@ -16,6 +17,8 @@ interface ExportModalProps {
   week: WeeklySchedule;
   scheduleRef: React.RefObject<HTMLElement>;
   theme: string;
+  operators: Operator[];
+  tasks: TaskType[];
 }
 
 type ExportFormat = 'png' | 'pdf' | 'whatsapp';
@@ -25,13 +28,16 @@ const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   week,
   scheduleRef,
-  theme
+  theme,
+  operators,
+  tasks
 }) => {
   const [animateIn, setAnimateIn] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pdfTheme, setPdfTheme] = useState<ExportTheme>('modern');
 
   useEffect(() => {
     if (isOpen) {
@@ -83,7 +89,11 @@ const ExportModal: React.FC<ExportModalProps> = ({
           break;
         }
         case 'pdf': {
-          const blob = await exportToPdf(scheduleRef.current, week);
+          const blob = await exportToPdf(scheduleRef.current, week, {
+            theme: pdfTheme,
+            operators,
+            tasks
+          });
           downloadFile(blob, generateFilename(week, 'pdf'));
           break;
         }
@@ -172,7 +182,49 @@ const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-3">
+        <div className="p-6 space-y-4">
+          {/* PDF Theme Selector */}
+          <div className={`p-4 rounded-xl border ${isDark ? 'border-slate-800 bg-slate-800/30' : 'border-gray-100 bg-gray-50'}`}>
+            <div className="flex items-center gap-2 mb-3">
+              <Palette className={`h-4 w-4 ${isDark ? 'text-slate-400' : 'text-gray-500'}`} />
+              <span className={`text-sm font-medium ${isDark ? 'text-slate-300' : 'text-gray-700'}`}>PDF Theme</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPdfTheme('modern')}
+                className={`p-3 rounded-lg border-2 transition-all text-left ${
+                  pdfTheme === 'modern'
+                    ? isDark
+                      ? 'border-blue-500 bg-blue-500/10'
+                      : 'border-blue-500 bg-blue-50'
+                    : isDark
+                    ? 'border-slate-700 hover:border-slate-600'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Modern</div>
+                <div className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>App-style layout</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPdfTheme('classic')}
+                className={`p-3 rounded-lg border-2 transition-all text-left ${
+                  pdfTheme === 'classic'
+                    ? isDark
+                      ? 'border-green-500 bg-green-500/10'
+                      : 'border-green-600 bg-green-50'
+                    : isDark
+                    ? 'border-slate-700 hover:border-slate-600'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Classic</div>
+                <div className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>Operational Plan 4M</div>
+              </button>
+            </div>
+          </div>
+
           {exportOptions.map((option) => {
             const isSelected = selectedFormat === option.id;
             const isSuccess = exportSuccess === option.id;

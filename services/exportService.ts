@@ -1,13 +1,40 @@
 import { toPng, toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import { WeeklySchedule } from '../types';
+import { WeeklySchedule, Operator, TaskType, MOCK_TASKS } from '../types';
 import { getWeekLabel, getWeekRangeString } from './weekUtils';
+
+export type ExportTheme = 'modern' | 'classic';
 
 export interface ExportOptions {
   format: 'png' | 'pdf' | 'whatsapp';
   quality?: number;
   includeHeader?: boolean;
+  theme?: ExportTheme;
 }
+
+// Task colors for classic theme (matching the original schedule)
+const CLASSIC_TASK_COLORS: Record<string, { bg: string; text: string }> = {
+  'Troubleshooter': { bg: '#00B0F0', text: '#000000' },
+  'Troubleshooter AD': { bg: '#FF6600', text: '#FFFFFF' },
+  'Quality checker': { bg: '#808080', text: '#FFFFFF' },
+  'MONO counter': { bg: '#FFFF00', text: '#000000' },
+  'Filler': { bg: '#92D050', text: '#000000' },
+  'LVB Sheet': { bg: '#FFFF00', text: '#000000' },
+  'Decanting': { bg: '#92D050', text: '#000000' },
+  'Platform': { bg: '#FF66FF', text: '#000000' },
+  'EST': { bg: '#9966FF', text: '#FFFFFF' },
+  'Exceptions': { bg: '#FF0000', text: '#FFFFFF' },
+  'Exceptions/Station': { bg: '#C0C0C0', text: '#000000' },
+  'Training': { bg: '#00B0F0', text: '#000000' },
+  'Trainer': { bg: '#00B0F0', text: '#000000' },
+  'Process': { bg: '#90EE90', text: '#000000' },
+  'People': { bg: '#90EE90', text: '#000000' },
+  'Off process': { bg: '#C0C0C0', text: '#000000' },
+  'Process/AD': { bg: '#90EE90', text: '#000000' },
+};
+
+// Dutch day abbreviations
+const DUTCH_DAYS = ['Ma', 'Di', 'Wo', 'Do', 'Vr'];
 
 /**
  * Export the schedule grid as a PNG image
@@ -49,8 +76,20 @@ export async function exportToPng(
  */
 export async function exportToPdf(
   element: HTMLElement,
-  week: WeeklySchedule
+  week: WeeklySchedule,
+  options: {
+    theme?: ExportTheme;
+    operators?: Operator[];
+    tasks?: TaskType[];
+  } = {}
 ): Promise<Blob> {
+  const { theme = 'modern', operators = [], tasks = MOCK_TASKS } = options;
+
+  if (theme === 'classic' && operators.length > 0) {
+    return exportToPdfClassic(week, operators, tasks);
+  }
+
+  // Modern theme - screenshot-based export
   // First get the PNG data
   const dataUrl = await exportToPng(element, week, { quality: 1 });
 
@@ -121,6 +160,200 @@ export async function exportToPdf(
   );
 
   return pdf.output('blob');
+}
+
+/**
+ * Export the schedule in the classic "Operational Plan 4M" format
+ */
+function exportToPdfClassic(
+  week: WeeklySchedule,
+  operators: Operator[],
+  tasks: TaskType[]
+): Blob {
+  const pdf = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+
+  // Layout configuration
+  const margin = 10;
+  const nameColWidth = 35;
+  const dayColWidth = (pageWidth - margin * 2 - nameColWidth) / 5;
+  const headerHeight = 25;
+  const rowHeight = 7;
+
+  let y = margin;
+
+  // === MAIN HEADER ===
+  pdf.setFillColor(0, 128, 0); // Green header
+  pdf.rect(margin, y, pageWidth - margin * 2, 12, 'F');
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFontSize(16);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('OPERATIONAL PLAN 4M', pageWidth / 2, y + 8, { align: 'center' });
+  y += 12;
+
+  // === WEEKLY PLANNING SUBHEADER ===
+  pdf.setFillColor(255, 255, 255);
+  pdf.setTextColor(0, 0, 0);
+  pdf.setFontSize(12);
+  pdf.text('WEEKLY PLANNING', pageWidth / 2, y + 6, { align: 'center' });
+  y += 10;
+
+  // === WEEK/DAY/DATE HEADER ROWS ===
+  const headerRows = [
+    { label: 'Week', values: [`WEEK ${week.weekNumber}`], span: true },
+    { label: 'Day', values: DUTCH_DAYS, span: false },
+    { label: 'Date', values: week.days.map(d => {
+      const date = new Date(d.date);
+      return `${date.getDate()}-${date.toLocaleString('en', { month: 'short' }).toLowerCase()}`;
+    }), span: false }
+  ];
+
+  headerRows.forEach((row, rowIdx) => {
+    // Name column
+    pdf.setFillColor(255, 255, 255);
+    pdf.rect(margin, y, nameColWidth, rowHeight, 'FD');
+    pdf.setFontSize(9);
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text(row.label, margin + nameColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
+
+    // Day columns
+    if (row.span) {
+      // Span across all days
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(margin + nameColWidth, y, dayColWidth * 5, rowHeight, 'FD');
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(row.values[0], margin + nameColWidth + (dayColWidth * 5) / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
+    } else {
+      row.values.forEach((val, i) => {
+        const bgColor = rowIdx === 1 ? getHeaderDayColor(i) : [255, 255, 255];
+        pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+        pdf.rect(margin + nameColWidth + i * dayColWidth, y, dayColWidth, rowHeight, 'FD');
+        pdf.setTextColor(0, 0, 0);
+        pdf.setFont('helvetica', rowIdx === 1 ? 'bold' : 'normal');
+        pdf.text(val, margin + nameColWidth + i * dayColWidth + dayColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
+      });
+    }
+    y += rowHeight;
+  });
+
+  y += 2; // Small gap after header
+
+  // === OPERATOR SECTIONS ===
+  const regularOps = operators.filter(op => op.type === 'Regular');
+  const flexOps = operators.filter(op => op.type === 'Flex');
+  const coordinators = operators.filter(op => op.type === 'Coordinator');
+
+  // Render regular operators
+  renderOperatorSection(pdf, regularOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
+  y += regularOps.length * rowHeight + 3;
+
+  // Render flex operators with separator
+  if (flexOps.length > 0) {
+    pdf.setFillColor(200, 200, 200);
+    pdf.rect(margin, y, pageWidth - margin * 2, 1, 'F');
+    y += 3;
+    renderOperatorSection(pdf, flexOps, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
+    y += flexOps.length * rowHeight + 3;
+  }
+
+  // Render coordinators with separator
+  if (coordinators.length > 0) {
+    pdf.setFillColor(200, 200, 200);
+    pdf.rect(margin, y, pageWidth - margin * 2, 1, 'F');
+    y += 3;
+    renderOperatorSection(pdf, coordinators, week, tasks, margin, nameColWidth, dayColWidth, rowHeight, y);
+  }
+
+  return pdf.output('blob');
+}
+
+/**
+ * Get header day column background color based on index
+ */
+function getHeaderDayColor(index: number): [number, number, number] {
+  const colors: [number, number, number][] = [
+    [255, 192, 203], // Pink - Monday
+    [255, 255, 153], // Yellow - Tuesday
+    [173, 216, 230], // Light Blue - Wednesday
+    [144, 238, 144], // Light Green - Thursday
+    [221, 160, 221], // Plum - Friday
+  ];
+  return colors[index] || [255, 255, 255];
+}
+
+/**
+ * Render a section of operators in the classic format
+ */
+function renderOperatorSection(
+  pdf: jsPDF,
+  operators: Operator[],
+  week: WeeklySchedule,
+  tasks: TaskType[],
+  margin: number,
+  nameColWidth: number,
+  dayColWidth: number,
+  rowHeight: number,
+  startY: number
+): void {
+  let y = startY;
+
+  operators.forEach(op => {
+    // Operator name cell
+    pdf.setFillColor(255, 255, 255);
+    pdf.setDrawColor(200, 200, 200);
+    pdf.rect(margin, y, nameColWidth, rowHeight, 'FD');
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFontSize(9);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(op.name, margin + 2, y + rowHeight / 2 + 1.5);
+
+    // Day cells
+    week.days.forEach((day, dayIdx) => {
+      const assignment = day.assignments[op.id];
+      const taskId = assignment?.taskId;
+      const task = taskId ? tasks.find(t => t.id === taskId) : null;
+      const taskName = task?.name || '';
+
+      // Get color for this task
+      const colors = CLASSIC_TASK_COLORS[taskName] || { bg: '#FFFFFF', text: '#000000' };
+      const bgColor = hexToRgb(colors.bg);
+      const textColor = hexToRgb(colors.text);
+
+      pdf.setFillColor(bgColor.r, bgColor.g, bgColor.b);
+      pdf.setDrawColor(200, 200, 200);
+      pdf.rect(margin + nameColWidth + dayIdx * dayColWidth, y, dayColWidth, rowHeight, 'FD');
+
+      if (taskName) {
+        pdf.setTextColor(textColor.r, textColor.g, textColor.b);
+        pdf.setFontSize(7);
+        pdf.setFont('helvetica', 'normal');
+        // Truncate long task names
+        const displayName = taskName.length > 18 ? taskName.substring(0, 16) + '...' : taskName;
+        pdf.text(displayName, margin + nameColWidth + dayIdx * dayColWidth + dayColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
+      }
+    });
+
+    y += rowHeight;
+  });
+}
+
+/**
+ * Convert hex color to RGB
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 255, g: 255, b: 255 };
 }
 
 /**

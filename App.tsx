@@ -126,15 +126,6 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
-  // Close operator menu when clicking outside
-  useEffect(() => {
-    if (!openOperatorMenu) return;
-
-    const handleClickOutside = () => setOpenOperatorMenu(null);
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, [openOperatorMenu]);
-
   // Settings State
   const [settingsTab, setSettingsTab] = useState<'tasks' | 'automation' | 'integrations'>('tasks');
 
@@ -145,6 +136,15 @@ function App() {
   const [teamViewMode, setTeamViewMode] = useState<'cards' | 'table' | 'matrix'>('cards');
   const [openOperatorMenu, setOpenOperatorMenu] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Close operator menu when clicking outside
+  useEffect(() => {
+    if (!openOperatorMenu) return;
+
+    const handleClickOutside = () => setOpenOperatorMenu(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openOperatorMenu]);
 
   const styles = THEME_STYLES[theme];
 
@@ -2460,6 +2460,8 @@ function App() {
         week={currentWeek}
         scheduleRef={scheduleGridRef}
         theme={theme}
+        operators={operators}
+        tasks={tasks}
       />
 
       {/* Command Palette */}
