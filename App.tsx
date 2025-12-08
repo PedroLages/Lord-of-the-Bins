@@ -8,7 +8,7 @@ import {
   Layout, Moon, Grid, LayoutDashboard, LogOut, Menu, Box, Zap,
   TrendingUp, Activity, PieChart, Bell, Globe, Lock, Unlock, AlertTriangle,
   ArrowRight, Briefcase, Award, UserCheck, Sliders, Puzzle, Shield,
-  Check, Layers, GitBranch, Cpu, Send
+  Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3
 } from 'lucide-react';
 import {
   Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay
@@ -126,6 +126,15 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
+  // Close operator menu when clicking outside
+  useEffect(() => {
+    if (!openOperatorMenu) return;
+
+    const handleClickOutside = () => setOpenOperatorMenu(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openOperatorMenu]);
+
   // Settings State
   const [settingsTab, setSettingsTab] = useState<'tasks' | 'automation' | 'integrations'>('tasks');
 
@@ -133,6 +142,8 @@ function App() {
   const [teamFilter, setTeamFilter] = useState<'All' | 'Regular' | 'Flex' | 'Coordinator'>('All');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Sick' | 'Leave'>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [teamViewMode, setTeamViewMode] = useState<'cards' | 'table' | 'matrix'>('cards');
+  const [openOperatorMenu, setOpenOperatorMenu] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const styles = THEME_STYLES[theme];
@@ -907,6 +918,28 @@ function App() {
             </div>
 
             <div className="flex gap-3 w-full md:w-auto">
+               {/* View Toggle */}
+               <div className={`flex p-1 rounded-xl border ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200 shadow-sm'}`}>
+                  {[
+                    { id: 'cards', icon: Grid, title: 'Card View' },
+                    { id: 'table', icon: List, title: 'Table View' },
+                    { id: 'matrix', icon: Grid3X3, title: 'Skills Matrix' },
+                  ].map(view => (
+                    <button
+                      key={view.id}
+                      onClick={() => setTeamViewMode(view.id as any)}
+                      title={view.title}
+                      className={`p-2 rounded-lg transition-all ${
+                        teamViewMode === view.id
+                          ? (theme === 'Midnight' ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-white')
+                          : (theme === 'Midnight' ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-50')
+                      }`}
+                    >
+                      <view.icon className="h-4 w-4" />
+                    </button>
+                  ))}
+               </div>
+
                <div className="relative flex-1 md:w-64">
                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                    <input
@@ -958,7 +991,7 @@ function App() {
            </div>
          )}
 
-         {/* 3. The Grid */}
+         {/* 3. The Views */}
          {filteredOperators.length === 0 ? (
            <div className={`text-center py-16 ${styles.card}`}>
              <Users className={`h-12 w-12 mx-auto mb-4 ${styles.muted} opacity-30`} />
@@ -970,13 +1003,14 @@ function App() {
                }
              </p>
            </div>
-         ) : (
+         ) : teamViewMode === 'cards' ? (
+           /* CARD VIEW */
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredOperators.map((op) => (
               <div key={op.id} className={`group relative flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl overflow-hidden ${styles.card}`}>
                  {/* Top Status Bar */}
                  <div className={`h-1.5 w-full ${op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`} />
-                 
+
                  <div className="p-5 flex-1 flex flex-col">
                     {/* Header */}
                     <div className="flex justify-between items-start mb-4">
@@ -995,16 +1029,93 @@ function App() {
                              </p>
                           </div>
                        </div>
-                       <button
-                          onClick={() => {
-                            setEditingOperator(op);
-                            setIsOperatorModalOpen(true);
-                          }}
-                          title="Edit profile"
-                          className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'Midnight' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-400'}`}
-                       >
-                          <Settings className="h-4 w-4" />
-                       </button>
+                       <div className="relative">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenOperatorMenu(openOperatorMenu === op.id ? null : op.id);
+                            }}
+                            title="More actions"
+                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'Midnight' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-400'}`}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                          {/* Dropdown Menu */}
+                          {openOperatorMenu === op.id && (
+                            <div
+                              className={`absolute right-0 top-full mt-1 w-44 z-50 rounded-xl shadow-xl border overflow-hidden ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-900 border-slate-700'
+                                  : 'bg-white border-gray-200'
+                              }`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                onClick={() => {
+                                  setEditingOperator(op);
+                                  setIsOperatorModalOpen(true);
+                                  setOpenOperatorMenu(null);
+                                }}
+                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                  theme === 'Midnight'
+                                    ? 'text-slate-300 hover:bg-slate-800'
+                                    : 'text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                <Edit2 className="h-4 w-4" />
+                                Edit Profile
+                              </button>
+                              <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                                  Set Status
+                                </div>
+                                {(['Active', 'Sick', 'Leave'] as const).map(status => (
+                                  <button
+                                    key={status}
+                                    onClick={() => {
+                                      setOperators(prev => prev.map(o =>
+                                        o.id === op.id ? { ...o, status } : o
+                                      ));
+                                      setOpenOperatorMenu(null);
+                                    }}
+                                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                                      theme === 'Midnight'
+                                        ? 'text-slate-300 hover:bg-slate-800'
+                                        : 'text-gray-700 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    <div className={`w-2 h-2 rounded-full ${
+                                      status === 'Active' ? 'bg-emerald-500' :
+                                      status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
+                                    }`} />
+                                    {status}
+                                    {op.status === status && (
+                                      <Check className="h-3 w-3 ml-auto text-emerald-500" />
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                              <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`Delete ${op.name}? This cannot be undone.`)) {
+                                      setOperators(prev => prev.filter(o => o.id !== op.id));
+                                    }
+                                    setOpenOperatorMenu(null);
+                                  }}
+                                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                    theme === 'Midnight'
+                                      ? 'text-red-400 hover:bg-red-500/10'
+                                      : 'text-red-600 hover:bg-red-50'
+                                  }`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  Delete Operator
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                       </div>
                     </div>
 
                     {/* Quick Availability Viz */}
@@ -1028,8 +1139,8 @@ function App() {
                        <div className="flex flex-wrap gap-1.5">
                           {op.skills.slice(0, 5).map(skill => (
                              <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md border ${
-                               theme === 'Midnight' 
-                                 ? 'bg-slate-900 border-slate-700 text-slate-400' 
+                               theme === 'Midnight'
+                                 ? 'bg-slate-900 border-slate-700 text-slate-400'
                                  : 'bg-white border-gray-200 text-gray-600'
                              }`}>
                                 {skill}
@@ -1044,21 +1155,281 @@ function App() {
                     </div>
                  </div>
 
-                 {/* Footer Action */}
+                 {/* Footer */}
                  <div className={`px-5 py-3 border-t flex items-center justify-between ${styles.cardHeader}`}>
                     <span className={`text-xs font-medium ${styles.muted}`}>ID: #{op.id.substring(0,4)}</span>
-                    <button 
-                       onClick={() => {
-                          setEditingOperator(op);
-                          setIsOperatorModalOpen(true);
-                       }}
-                       className={`text-xs font-bold hover:underline ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600'}`}
-                    >
-                       View Profile
-                    </button>
+                    <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                       {op.skills.length} skill{op.skills.length !== 1 ? 's' : ''}
+                    </span>
                  </div>
               </div>
             ))}
+           </div>
+         ) : teamViewMode === 'table' ? (
+           /* TABLE VIEW */
+           <div className={`overflow-hidden ${styles.card}`}>
+             <div className="overflow-x-auto">
+               <table className="w-full">
+                 <thead>
+                   <tr className={theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'}>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Name</th>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Type</th>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Status</th>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Availability</th>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Skills</th>
+                     <th className={`px-4 py-3 text-right text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Actions</th>
+                   </tr>
+                 </thead>
+                 <tbody className={`divide-y ${theme === 'Midnight' ? 'divide-slate-800' : 'divide-gray-100'}`}>
+                   {filteredOperators.map((op) => (
+                     <tr key={op.id} className={`group transition-colors ${theme === 'Midnight' ? 'hover:bg-slate-800/30' : 'hover:bg-gray-50'}`}>
+                       <td className="px-4 py-3">
+                         <div className="flex items-center gap-3">
+                           <div className={`h-8 w-8 rounded-lg flex items-center justify-center text-sm font-bold ${
+                             theme === 'Midnight' ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-700'
+                           }`}>
+                             {op.name.charAt(0)}
+                           </div>
+                           <span className={`font-semibold ${styles.text}`}>{op.name}</span>
+                         </div>
+                       </td>
+                       <td className="px-4 py-3">
+                         <span className={`px-2 py-1 text-xs font-bold rounded-md ${
+                           op.type === 'Coordinator' ? 'bg-emerald-100 text-emerald-700' :
+                           op.type === 'Flex' ? 'bg-purple-100 text-purple-700' :
+                           theme === 'Midnight' ? 'bg-slate-700 text-slate-300' : 'bg-gray-100 text-gray-600'
+                         }`}>
+                           {op.type}
+                         </span>
+                       </td>
+                       <td className="px-4 py-3">
+                         <span className={`inline-flex items-center gap-1.5 px-2 py-1 text-xs font-bold rounded-md ${
+                           op.status === 'Active' ? 'bg-emerald-100 text-emerald-700' :
+                           op.status === 'Sick' ? 'bg-red-100 text-red-700' :
+                           'bg-amber-100 text-amber-700'
+                         }`}>
+                           <div className={`w-1.5 h-1.5 rounded-full ${
+                             op.status === 'Active' ? 'bg-emerald-500' :
+                             op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
+                           }`} />
+                           {op.status}
+                         </span>
+                       </td>
+                       <td className="px-4 py-3">
+                         <div className="flex gap-1">
+                           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((d) => (
+                             <div
+                               key={d}
+                               title={d}
+                               className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${
+                                 op.availability?.[d as WeekDay]
+                                   ? 'bg-emerald-100 text-emerald-700'
+                                   : theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-400'
+                               }`}
+                             >
+                               {d.charAt(0)}
+                             </div>
+                           ))}
+                         </div>
+                       </td>
+                       <td className="px-4 py-3">
+                         <div className="flex flex-wrap gap-1 max-w-xs">
+                           {op.skills.slice(0, 3).map(skill => (
+                             <span key={skill} className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                               theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-gray-600'
+                             }`}>
+                               {skill}
+                             </span>
+                           ))}
+                           {op.skills.length > 3 && (
+                             <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                               theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+                             }`}>
+                               +{op.skills.length - 3}
+                             </span>
+                           )}
+                         </div>
+                       </td>
+                       <td className="px-4 py-3 text-right">
+                         <div className="relative inline-block">
+                           <button
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               setOpenOperatorMenu(openOperatorMenu === `table-${op.id}` ? null : `table-${op.id}`);
+                             }}
+                             className={`p-2 rounded-lg transition-colors ${
+                               theme === 'Midnight'
+                                 ? 'hover:bg-slate-800 text-slate-400'
+                                 : 'hover:bg-gray-100 text-gray-400'
+                             }`}
+                           >
+                             <MoreHorizontal className="h-4 w-4" />
+                           </button>
+                           {openOperatorMenu === `table-${op.id}` && (
+                             <div
+                               className={`absolute right-0 top-full mt-1 w-44 z-50 rounded-xl shadow-xl border overflow-hidden ${
+                                 theme === 'Midnight'
+                                   ? 'bg-slate-900 border-slate-700'
+                                   : 'bg-white border-gray-200'
+                               }`}
+                               onClick={(e) => e.stopPropagation()}
+                             >
+                               <button
+                                 onClick={() => {
+                                   setEditingOperator(op);
+                                   setIsOperatorModalOpen(true);
+                                   setOpenOperatorMenu(null);
+                                 }}
+                                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                   theme === 'Midnight'
+                                     ? 'text-slate-300 hover:bg-slate-800'
+                                     : 'text-gray-700 hover:bg-gray-50'
+                                 }`}
+                               >
+                                 <Edit2 className="h-4 w-4" />
+                                 Edit Profile
+                               </button>
+                               <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                 <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                                   Set Status
+                                 </div>
+                                 {(['Active', 'Sick', 'Leave'] as const).map(status => (
+                                   <button
+                                     key={status}
+                                     onClick={() => {
+                                       setOperators(prev => prev.map(o =>
+                                         o.id === op.id ? { ...o, status } : o
+                                       ));
+                                       setOpenOperatorMenu(null);
+                                     }}
+                                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                                       theme === 'Midnight'
+                                         ? 'text-slate-300 hover:bg-slate-800'
+                                         : 'text-gray-700 hover:bg-gray-50'
+                                     }`}
+                                   >
+                                     <div className={`w-2 h-2 rounded-full ${
+                                       status === 'Active' ? 'bg-emerald-500' :
+                                       status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
+                                     }`} />
+                                     {status}
+                                     {op.status === status && (
+                                       <Check className="h-3 w-3 ml-auto text-emerald-500" />
+                                     )}
+                                   </button>
+                                 ))}
+                               </div>
+                               <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                 <button
+                                   onClick={() => {
+                                     if (confirm(`Delete ${op.name}? This cannot be undone.`)) {
+                                       setOperators(prev => prev.filter(o => o.id !== op.id));
+                                     }
+                                     setOpenOperatorMenu(null);
+                                   }}
+                                   className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                     theme === 'Midnight'
+                                       ? 'text-red-400 hover:bg-red-500/10'
+                                       : 'text-red-600 hover:bg-red-50'
+                                   }`}
+                                 >
+                                   <Trash2 className="h-4 w-4" />
+                                   Delete Operator
+                                 </button>
+                               </div>
+                             </div>
+                           )}
+                         </div>
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+           </div>
+         ) : (
+           /* SKILLS MATRIX VIEW */
+           <div className={`overflow-hidden ${styles.card}`}>
+             <div className="overflow-x-auto">
+               <table className="w-full">
+                 <thead>
+                   <tr className={theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'}>
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider sticky left-0 z-10 ${
+                       theme === 'Midnight' ? 'bg-slate-800/90' : 'bg-gray-50'
+                     } ${styles.muted}`}>
+                       Operator
+                     </th>
+                     {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => (
+                       <th key={skill} className={`px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wider ${styles.muted}`}>
+                         <div className="writing-mode-vertical transform -rotate-45 origin-bottom-left whitespace-nowrap h-20 flex items-end">
+                           {skill}
+                         </div>
+                       </th>
+                     ))}
+                   </tr>
+                 </thead>
+                 <tbody className={`divide-y ${theme === 'Midnight' ? 'divide-slate-800' : 'divide-gray-100'}`}>
+                   {filteredOperators.filter(op => op.type !== 'Coordinator').map((op) => (
+                     <tr key={op.id} className={`group transition-colors ${theme === 'Midnight' ? 'hover:bg-slate-800/30' : 'hover:bg-gray-50'}`}>
+                       <td className={`px-4 py-2 sticky left-0 z-10 ${
+                         theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-white/95'
+                       }`}>
+                         <div className="flex items-center gap-2">
+                           <div className={`w-2 h-2 rounded-full ${
+                             op.status === 'Active' ? 'bg-emerald-500' :
+                             op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
+                           }`} />
+                           <span className={`font-medium text-sm ${styles.text}`}>{op.name}</span>
+                           <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                             op.type === 'Flex' ? 'bg-purple-100 text-purple-700' :
+                             theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-gray-500'
+                           }`}>
+                             {op.type}
+                           </span>
+                         </div>
+                       </td>
+                       {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
+                         const hasSkill = op.skills.includes(skill);
+                         return (
+                           <td key={skill} className="px-2 py-2 text-center">
+                             {hasSkill ? (
+                               <div className="w-6 h-6 mx-auto rounded-md bg-emerald-500 flex items-center justify-center">
+                                 <Check className="h-3.5 w-3.5 text-white" />
+                               </div>
+                             ) : (
+                               <div className={`w-6 h-6 mx-auto rounded-md ${
+                                 theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-100'
+                               }`} />
+                             )}
+                           </td>
+                         );
+                       })}
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+             {/* Skills Coverage Summary */}
+             <div className={`px-4 py-3 border-t ${theme === 'Midnight' ? 'border-slate-800 bg-slate-800/30' : 'border-gray-100 bg-gray-50'}`}>
+               <div className="flex flex-wrap gap-4">
+                 {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
+                   const count = filteredOperators.filter(op => op.type !== 'Coordinator' && op.skills.includes(skill)).length;
+                   const total = filteredOperators.filter(op => op.type !== 'Coordinator').length;
+                   const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
+                   return (
+                     <div key={skill} className="text-xs">
+                       <span className={styles.muted}>{skill}:</span>
+                       <span className={`ml-1 font-bold ${
+                         percentage >= 50 ? 'text-emerald-500' :
+                         percentage >= 25 ? 'text-amber-500' : 'text-red-500'
+                       }`}>
+                         {count}/{total}
+                       </span>
+                     </div>
+                   );
+                 })}
+               </div>
+             </div>
            </div>
          )}
       </div>
