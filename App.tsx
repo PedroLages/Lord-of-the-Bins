@@ -11,10 +11,11 @@ import {
   Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X
 } from 'lucide-react';
 import {
-  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement
+  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyStaffingPlan, TaskPlanningRequirement
 } from './types';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
+import PlanningModal from './components/PlanningModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
@@ -173,6 +174,9 @@ function App() {
   // Export Modal State
   const [showExportModal, setShowExportModal] = useState(false);
   const scheduleGridRef = useRef<HTMLDivElement>(null);
+
+  // Planning Modal State
+  const [showPlanningModal, setShowPlanningModal] = useState(false);
 
   // Command Palette State
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -897,6 +901,109 @@ function App() {
     } catch (e) {
       console.error("Scheduling error:", e);
       alert("Failed to generate schedule. Check console for details.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Handle applying the planning modal configuration and running smart fill
+  const handlePlanApply = (plan: WeeklyStaffingPlan) => {
+    setIsGenerating(true);
+    try {
+      const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+      // Convert WeeklyStaffingPlan to TaskRequirement format for the algorithm
+      // The algorithm needs TaskRequirement[], so we convert from the planning modal format
+      const planTaskRequirements: TaskRequirement[] = plan.requirements.map(req => {
+        // For now, use the first alternative as the primary requirement
+        // The algorithm will use this to guide assignments
+        const primaryConfig = req.alternatives[0];
+        return {
+          taskId: req.taskId,
+          defaultRequirements: primaryConfig?.requirements || [{ type: 'Any' as const, count: 1 }],
+          enabled: req.enabled,
+        };
+      });
+
+      // Build current assignments map for the algorithm (include pinned field)
+      const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
+      currentWeek.days.forEach((day, idx) => {
+        currentAssignmentsMap[idx] = day.assignments;
+      });
+
+      // Run smart fill with the plan's requirements
+      const result = generateSmartSchedule({
+        operators,
+        tasks,
+        days: daysList,
+        currentAssignments: currentAssignmentsMap,
+        rules: schedulingRules,
+        taskRequirements: planTaskRequirements.length > 0 ? planTaskRequirements : taskRequirements
+      });
+
+      if (result && result.assignments) {
+        const newSchedule = { ...currentWeek };
+        let assignmentCount = 0;
+
+        // First, clear assignments for operators on days they're NOT available
+        daysList.forEach((day, dayIndex) => {
+          operators.forEach(op => {
+            const existingAssignment = newSchedule.days[dayIndex]?.assignments[op.id];
+            if (!op.availability[day] && existingAssignment && existingAssignment.taskId) {
+              if (!existingAssignment.locked && !existingAssignment.pinned) {
+                newSchedule.days[dayIndex].assignments[op.id] = {
+                  taskId: null,
+                  locked: false,
+                  pinned: false
+                };
+              }
+            }
+          });
+        });
+
+        result.assignments.forEach((assignment) => {
+          const dayIndex = daysList.indexOf(assignment.day as WeekDay);
+          if (dayIndex === -1) return;
+
+          const currentAssignment = newSchedule.days[dayIndex].assignments[assignment.operatorId];
+          if (currentAssignment && (currentAssignment.locked || currentAssignment.pinned)) return;
+
+          const task = tasks.find(t => t.id === assignment.taskId);
+          if (task) {
+            newSchedule.days[dayIndex].assignments[assignment.operatorId] = {
+              taskId: task.id,
+              locked: false,
+              pinned: false
+            };
+            assignmentCount++;
+          }
+        });
+        setCurrentWeek(newSchedule);
+        setScheduleWarnings(result.warnings);
+
+        // Log the activity
+        if (assignmentCount > 0) {
+          const entry = logScheduleGenerated(getWeekLabel(newSchedule), assignmentCount);
+          setActivityLog(prev => [entry, ...prev]);
+        }
+
+        // Show toast notification
+        if (result.warnings.length > 0) {
+          toast.warning(
+            `Plan Applied with ${result.warnings.length} Warning${result.warnings.length > 1 ? 's' : ''}`,
+            'Review the warnings below to ensure schedule quality',
+            { duration: 6000 }
+          );
+        } else if (assignmentCount > 0) {
+          toast.success(
+            'Plan Applied Successfully',
+            `${assignmentCount} assignment${assignmentCount > 1 ? 's' : ''} made based on your requirements`
+          );
+        }
+      }
+    } catch (e) {
+      console.error("Planning error:", e);
+      toast.error('Failed to Apply Plan', 'Check console for details');
     } finally {
       setIsGenerating(false);
     }
@@ -2697,6 +2804,18 @@ function App() {
            </div>
 
            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {/* Plan Requirements Button */}
+              <button
+                onClick={() => setShowPlanningModal(true)}
+                disabled={currentWeek.locked}
+                className={`group relative flex items-center justify-center gap-2 px-4 py-2.5 transition-all overflow-hidden flex-1 sm:flex-initial ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
+                title={currentWeek.locked ? 'Unlock schedule to plan' : 'Configure staffing requirements before Smart Fill'}
+              >
+                <Layers className="h-4 w-4 opacity-90" />
+                <span className="font-medium text-sm whitespace-nowrap">Plan</span>
+              </button>
+
+              {/* Smart Fill Button */}
               <button
                 onClick={handleAutoSchedule}
                 disabled={isGenerating || currentWeek.locked}
@@ -3653,6 +3772,18 @@ function App() {
         theme={theme}
         operators={operators}
         tasks={tasks}
+      />
+
+      {/* Planning Modal */}
+      <PlanningModal
+        isOpen={showPlanningModal}
+        onClose={() => setShowPlanningModal(false)}
+        onApply={handlePlanApply}
+        tasks={tasks}
+        weekNumber={currentWeek.weekNumber}
+        year={currentWeek.year}
+        theme={theme}
+        existingRequirements={taskRequirements}
       />
 
       {/* Clear Data Confirmation Modal */}

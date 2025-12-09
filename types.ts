@@ -21,6 +21,65 @@ export interface TaskRequirement {
   enabled?: boolean;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Planning Modal Types - For per-week staffing configuration
+// ─────────────────────────────────────────────────────────────────
+
+// A single staffing configuration for a task (AND requirements within)
+export interface StaffingConfiguration {
+  id: string;
+  requirements: OperatorTypeRequirement[];  // All must be satisfied (AND)
+}
+
+// Per-task planning with OR alternatives
+export interface TaskPlanningRequirement {
+  taskId: string;
+  // Array of alternative configurations (OR logic between them)
+  // e.g., [config1, config2] means "config1 OR config2 will satisfy this task"
+  alternatives: StaffingConfiguration[];
+  // Whether to include this task in the plan
+  enabled: boolean;
+}
+
+// The full week plan that the user configures in the modal
+export interface WeeklyStaffingPlan {
+  id: string;
+  name?: string;  // Optional name for saved templates
+  weekNumber?: number;
+  year?: number;
+  requirements: TaskPlanningRequirement[];
+  createdAt: string;
+  isTemplate?: boolean; // If true, this is a reusable template
+}
+
+// Helper to get total operators needed for a configuration
+export function getTotalFromConfiguration(config: StaffingConfiguration): number {
+  return config.requirements.reduce((sum, req) => sum + req.count, 0);
+}
+
+// Helper to get minimum total operators needed across all alternatives
+export function getMinTotalFromAlternatives(alternatives: StaffingConfiguration[]): number {
+  if (alternatives.length === 0) return 0;
+  return Math.min(...alternatives.map(getTotalFromConfiguration));
+}
+
+// Helper to create an empty staffing configuration
+export function createEmptyConfiguration(): StaffingConfiguration {
+  return {
+    id: crypto.randomUUID(),
+    requirements: [{ type: 'Any', count: 1 }],
+  };
+}
+
+// Helper to create an empty task planning requirement
+export function createEmptyTaskPlanningRequirement(taskId: string): TaskPlanningRequirement {
+  return {
+    taskId,
+    alternatives: [createEmptyConfiguration()],
+    enabled: true,
+  };
+}
+
 // Helper to get total required operators from requirements array
 export function getTotalFromRequirements(requirements: OperatorTypeRequirement[]): number {
   return requirements.reduce((sum, req) => sum + req.count, 0);
