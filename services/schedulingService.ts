@@ -10,6 +10,7 @@ export interface SchedulingRules {
   fairDistribution: boolean;
   balanceWorkload: boolean;
   autoAssignCoordinators: boolean; // Whether to auto-assign coordinators (TC) to their tasks
+  randomizationFactor: number; // 0-20: adds variety to schedule generation
 }
 
 export const DEFAULT_RULES: SchedulingRules = {
@@ -21,13 +22,17 @@ export const DEFAULT_RULES: SchedulingRules = {
   fairDistribution: true,
   balanceWorkload: true,
   autoAssignCoordinators: true, // TC auto-assignment enabled by default
+  randomizationFactor: 10, // Default medium randomization
 };
 
 // Heavy tasks that should be rotated
 const HEAVY_TASKS = ['Troubleshooter', 'Exceptions'];
 
-// Tasks that coordinators can be assigned to
-const COORDINATOR_TASKS = ['People', 'Process', 'Off process', 'Process/AD'];
+// Tasks that coordinators can be assigned to (must match task names)
+const COORDINATOR_TASKS = ['People', 'Process', 'Off process', 'Off Process'];
+
+// TC Task IDs for group scheduling
+const TC_TASK_IDS = ['t11', 't12', 't13']; // Process, People, Off process
 
 interface ScheduleRequestData {
   operators: Operator[];
@@ -83,15 +88,65 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
     operatorDailyAssignments[op.id] = {};
   });
 
+  // Handle TC scheduling as a group first (if enabled)
+  // This ensures all TCs get assigned with proper daily rotation
+  const tcAssignedByDay: Record<string, Set<string>> = {}; // day -> Set of TC operator IDs already assigned
+  days.forEach(day => {
+    tcAssignedByDay[day] = new Set();
+  });
+
+  if (rules.autoAssignCoordinators) {
+    const coordinators = operators.filter(op => op.type === 'Coordinator');
+    const tcTasks = tasks.filter(t => TC_TASK_IDS.includes(t.id));
+
+    if (coordinators.length > 0 && tcTasks.length > 0) {
+      const tcAssignments = scheduleTCsAsGroup(coordinators, tcTasks, days, currentAssignments);
+
+      // Add TC assignments to results and tracking
+      tcAssignments.forEach(assignment => {
+        assignments.push(assignment);
+        tcAssignedByDay[assignment.day].add(assignment.operatorId);
+        operatorTaskCount[assignment.operatorId] = (operatorTaskCount[assignment.operatorId] || 0) + 1;
+        operatorDailyAssignments[assignment.operatorId][assignment.day] = assignment.taskId;
+
+        // Update last task tracking
+        const lastTask = operatorLastTask[assignment.operatorId];
+        if (lastTask && lastTask.taskId === assignment.taskId) {
+          operatorLastTask[assignment.operatorId] = {
+            taskId: assignment.taskId,
+            consecutiveDays: lastTask.consecutiveDays + 1,
+          };
+        } else {
+          operatorLastTask[assignment.operatorId] = {
+            taskId: assignment.taskId,
+            consecutiveDays: 1,
+          };
+        }
+      });
+    }
+  }
+
   // Process each day
   days.forEach((day, dayIndex) => {
     const dayAssignments = currentAssignments[dayIndex] || {};
     const assignedOperatorsToday = new Set<string>();
     const taskAssignmentCount: Record<string, number> = {};
 
-    // First, respect locked assignments
+    // Include TCs already assigned by group scheduler
+    tcAssignedByDay[day].forEach(tcId => {
+      assignedOperatorsToday.add(tcId);
+      const tcTaskId = operatorDailyAssignments[tcId]?.[day];
+      if (tcTaskId) {
+        taskAssignmentCount[tcTaskId] = (taskAssignmentCount[tcTaskId] || 0) + 1;
+      }
+    });
+
+    // First, respect locked AND pinned assignments
     Object.entries(dayAssignments).forEach(([opId, assignment]) => {
-      if (assignment.locked && assignment.taskId) {
+      if ((assignment.locked || assignment.pinned) && assignment.taskId) {
+        // Skip if already assigned by TC group scheduler
+        if (assignedOperatorsToday.has(opId)) return;
+
         assignments.push({
           day,
           operatorId: opId,
@@ -130,12 +185,21 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       return true;
     });
 
+
     // Get tasks that need more operators and track how many are already assigned
     const taskAssignedCount: Record<string, number> = {};
 
-    // Count locked assignments per task
+    // Include TC tasks already assigned by group scheduler
+    tcAssignedByDay[day].forEach(tcId => {
+      const tcTaskId = operatorDailyAssignments[tcId]?.[day];
+      if (tcTaskId) {
+        taskAssignedCount[tcTaskId] = (taskAssignedCount[tcTaskId] || 0) + 1;
+      }
+    });
+
+    // Count locked and pinned assignments per task
     Object.values(dayAssignments).forEach(a => {
-      if (a.locked && a.taskId) {
+      if ((a.locked || a.pinned) && a.taskId) {
         taskAssignedCount[a.taskId] = (taskAssignedCount[a.taskId] || 0) + 1;
       }
     });
@@ -173,8 +237,14 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       });
     });
 
-    // Sort by score (highest first) and assign
-    scores.sort((a, b) => b.score - a.score);
+    // Sort by score (highest first) with randomization factor for variety
+    // Randomization adds a small random value to break ties and create variety
+    const randomFactor = rules.randomizationFactor || 0;
+    scores.sort((a, b) => {
+      const aScore = a.score + (randomFactor > 0 ? Math.random() * randomFactor : 0);
+      const bScore = b.score + (randomFactor > 0 ? Math.random() * randomFactor : 0);
+      return bScore - aScore;
+    });
 
     // Track task assignments count (for multiple operators per task)
     const taskAssignmentsThisRound: Record<string, number> = { ...taskAssignedCount };
@@ -266,6 +336,14 @@ function calculateAssignmentScore(
     );
     if (!isCoordinatorTask) {
       return { operatorId: operator.id, taskId: task.id, score: 0, reasons: ['Coordinator cannot do this task'] };
+    }
+
+    // TC scheduling: rotate every day - never same task 2 days in a row
+    const lastTask = tracking.operatorLastTask[operator.id];
+    if (lastTask && lastTask.taskId === task.id) {
+      // Strong penalty for same task as yesterday - force rotation
+      score -= 100;
+      reasons.push('TC must rotate daily');
     }
   }
 
@@ -449,4 +527,212 @@ export function validateSchedule(
   });
 
   return warnings;
+}
+
+/**
+ * Schedule all TCs as a group for the entire week using constraint satisfaction.
+ * This ensures:
+ * 1. No TC has the same task 2 days in a row
+ * 2. All TCs are assigned each day
+ * 3. Each TC gets variety in tasks across the week (fair distribution)
+ */
+function scheduleTCsAsGroup(
+  coordinators: Operator[],
+  tcTasks: TaskType[],
+  days: WeekDay[],
+  currentAssignments: Record<string, Record<string, ScheduleAssignment>>
+): Array<{ day: WeekDay; operatorId: string; taskId: string }> {
+  const assignments: Array<{ day: WeekDay; operatorId: string; taskId: string }> = [];
+
+  // Track what each TC was assigned yesterday
+  const tcLastTaskId: Record<string, string | null> = {};
+  // Track how many times each TC has been assigned each task this week
+  const tcWeeklyTaskCount: Record<string, Record<string, number>> = {};
+
+  coordinators.forEach(tc => {
+    tcLastTaskId[tc.id] = null;
+    tcWeeklyTaskCount[tc.id] = {};
+    TC_TASK_IDS.forEach(taskId => {
+      tcWeeklyTaskCount[tc.id][taskId] = 0;
+    });
+  });
+
+  // Get available TCs (active and available)
+  const getAvailableTCs = (day: WeekDay, dayIndex: number) => {
+    const dayAssigns = currentAssignments[dayIndex] || {};
+    return coordinators.filter(tc => {
+      // Skip if already locked/pinned
+      const existing = dayAssigns[tc.id];
+      if (existing && (existing.locked || existing.pinned) && existing.taskId) {
+        return false;
+      }
+      // Check availability and status
+      return tc.availability[day] && tc.status === 'Active';
+    });
+  };
+
+  // Get locked TC assignments for a day
+  const getLockedAssignments = (dayIndex: number) => {
+    const dayAssigns = currentAssignments[dayIndex] || {};
+    const locked: Record<string, string> = {};
+    coordinators.forEach(tc => {
+      const existing = dayAssigns[tc.id];
+      if (existing && (existing.locked || existing.pinned) && existing.taskId) {
+        // Only include if it's a TC task
+        if (TC_TASK_IDS.includes(existing.taskId)) {
+          locked[tc.id] = existing.taskId;
+        }
+      }
+    });
+    return locked;
+  };
+
+  // Score a permutation based on variety - lower score is better (prefers tasks not yet done)
+  const scorePermutation = (permutation: Record<string, string>): number => {
+    let score = 0;
+    Object.entries(permutation).forEach(([tcId, taskId]) => {
+      // Add the current count - this makes tasks already done more expensive
+      score += tcWeeklyTaskCount[tcId]?.[taskId] || 0;
+    });
+    return score;
+  };
+
+  // Find ALL valid permutations and return the best one (most variety)
+  const findBestAssignment = (
+    availableTCs: Operator[],
+    availableTasks: string[],
+    lockedAssignments: Record<string, string>
+  ): Record<string, string> | null => {
+    const validPermutations: Record<string, string>[] = [];
+
+    // Start with locked assignments
+    const baseResult: Record<string, string> = { ...lockedAssignments };
+    const usedTasks = new Set(Object.values(lockedAssignments));
+
+    // TCs that need assignment
+    const tcsToAssign = availableTCs.filter(tc => !baseResult[tc.id]);
+    // Tasks still available
+    const tasksToUse = availableTasks.filter(t => !usedTasks.has(t));
+
+    // Generate all valid permutations (avoiding same-as-yesterday)
+    const generatePermutations = (
+      tcIndex: number,
+      current: Record<string, string>
+    ): void => {
+      if (tcIndex >= tcsToAssign.length) {
+        validPermutations.push({ ...current });
+        return;
+      }
+
+      const tc = tcsToAssign[tcIndex];
+      const lastTask = tcLastTaskId[tc.id];
+
+      for (const taskId of tasksToUse) {
+        // Skip if task already used in this permutation
+        if (Object.values(current).includes(taskId)) continue;
+
+        // Skip if same as yesterday (daily rotation rule)
+        if (lastTask === taskId) continue;
+
+        current[tc.id] = taskId;
+        generatePermutations(tcIndex + 1, current);
+        delete current[tc.id];
+      }
+    };
+
+    generatePermutations(0, { ...baseResult });
+
+    // If we found valid permutations, pick the one with best variety score
+    if (validPermutations.length > 0) {
+      let bestPerm = validPermutations[0];
+      let bestScore = scorePermutation(bestPerm);
+
+      for (let i = 1; i < validPermutations.length; i++) {
+        const score = scorePermutation(validPermutations[i]);
+        if (score < bestScore) {
+          bestScore = score;
+          bestPerm = validPermutations[i];
+        }
+      }
+      return bestPerm;
+    }
+
+    // If no valid permutation with strict rotation, try relaxed (allow same as yesterday)
+    const relaxedPermutations: Record<string, string>[] = [];
+
+    const generateRelaxed = (
+      tcIndex: number,
+      current: Record<string, string>
+    ): void => {
+      if (tcIndex >= tcsToAssign.length) {
+        relaxedPermutations.push({ ...current });
+        return;
+      }
+
+      const tc = tcsToAssign[tcIndex];
+
+      for (const taskId of tasksToUse) {
+        if (Object.values(current).includes(taskId)) continue;
+
+        current[tc.id] = taskId;
+        generateRelaxed(tcIndex + 1, current);
+        delete current[tc.id];
+      }
+    };
+
+    generateRelaxed(0, { ...baseResult });
+
+    if (relaxedPermutations.length > 0) {
+      let bestPerm = relaxedPermutations[0];
+      let bestScore = scorePermutation(bestPerm);
+
+      for (let i = 1; i < relaxedPermutations.length; i++) {
+        const score = scorePermutation(relaxedPermutations[i]);
+        if (score < bestScore) {
+          bestScore = score;
+          bestPerm = relaxedPermutations[i];
+        }
+      }
+      return bestPerm;
+    }
+
+    return null;
+  };
+
+  // Process each day
+  days.forEach((day, dayIndex) => {
+    const availableTCs = getAvailableTCs(day, dayIndex);
+    const lockedAssignments = getLockedAssignments(dayIndex);
+
+    // Get TC tasks that still need assignment
+    const usedTaskIds = new Set(Object.values(lockedAssignments));
+    const availableTaskIds = TC_TASK_IDS.filter(t => !usedTaskIds.has(t));
+
+    const dayAssignment = findBestAssignment(availableTCs, availableTaskIds, lockedAssignments);
+
+    if (dayAssignment) {
+      Object.entries(dayAssignment).forEach(([tcId, taskId]) => {
+        // Only add if not already locked
+        if (!lockedAssignments[tcId]) {
+          assignments.push({ day, operatorId: tcId, taskId });
+        }
+        // Update last task tracking for next day
+        tcLastTaskId[tcId] = taskId;
+        // Update weekly count for variety tracking
+        if (tcWeeklyTaskCount[tcId]) {
+          tcWeeklyTaskCount[tcId][taskId] = (tcWeeklyTaskCount[tcId][taskId] || 0) + 1;
+        }
+      });
+
+      // Also update tracking for locked assignments
+      Object.entries(lockedAssignments).forEach(([tcId, taskId]) => {
+        tcLastTaskId[tcId] = taskId;
+        if (tcWeeklyTaskCount[tcId]) {
+          tcWeeklyTaskCount[tcId][taskId] = (tcWeeklyTaskCount[tcId][taskId] || 0) + 1;
+        }
+      });
+    }
+  });
+
+  return assignments;
 }

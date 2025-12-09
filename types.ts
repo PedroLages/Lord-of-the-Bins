@@ -18,12 +18,16 @@ export interface Operator {
   type: 'Regular' | 'Flex' | 'Coordinator';
   status: 'Active' | 'Sick' | 'Leave';
   // Simple availability: true if available that day
-  availability: Record<WeekDay, boolean>; 
+  availability: Record<WeekDay, boolean>;
+  // Soft delete flag - archived operators are hidden but not permanently deleted
+  archived?: boolean;
+  archivedAt?: string; // ISO date string when archived
 }
 
 export interface ScheduleAssignment {
   taskId: string | null; // null means Off or Unassigned
   locked: boolean; // If true, auto-scheduler won't touch it
+  pinned?: boolean; // If true, manual assignment protected from Smart Fill
 }
 
 export interface DailySchedule {
@@ -57,11 +61,10 @@ export const INITIAL_SKILLS = [
   'Process',
   'People',
   'Off Process',
-  'Process/AD',
 ];
 
 // Skills that are exclusive to Team Coordinators (TC)
-export const TC_SKILLS = ['Process', 'People', 'Off Process', 'Process/AD'];
+export const TC_SKILLS = ['Process', 'People', 'Off Process'];
 
 export const MOCK_TASKS: TaskType[] = [
   { id: 't1', name: 'Troubleshooter', color: '#0ea5e9', textColor: '#ffffff', requiredSkill: 'Troubleshooter', requiredOperators: 1 }, // Sky blue
@@ -77,8 +80,7 @@ export const MOCK_TASKS: TaskType[] = [
   { id: 't10', name: 'Troubleshooter AD', color: '#f97316', textColor: '#ffffff', requiredSkill: 'Troubleshooter', requiredOperators: 1 }, // Orange
   { id: 't11', name: 'Process', color: '#dcfce7', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1 }, // Pale Green
   { id: 't12', name: 'People', color: '#dcfce7', textColor: '#000000', requiredSkill: 'People', requiredOperators: 1 }, // Pale Green
-  { id: 't13', name: 'Off process', color: '#e5e7eb', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1 }, // Gray
-  { id: 't14', name: 'Process/AD', color: '#dcfce7', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1 }, // Pale Green - Coordinator afternoon shift
+  { id: 't13', name: 'Off process', color: '#e5e7eb', textColor: '#000000', requiredSkill: 'Off Process', requiredOperators: 1 }, // Gray - requires Off Process skill
 ];
 
 /**
@@ -114,8 +116,8 @@ export const MOCK_OPERATORS: Operator[] = [
   // Flex operators
   { id: 'op22', name: 'Flex Op 1', type: 'Flex', status: 'Active', skills: ['Exceptions/Station'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
   { id: 'op23', name: 'Flex Op 2', type: 'Flex', status: 'Active', skills: ['Exceptions/Station'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  // Coordinators (Team Coordinators)
-  { id: 'op10', name: 'Giedrius', type: 'Coordinator', status: 'Active', skills: ['Process', 'People'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op11', name: 'Natalia', type: 'Coordinator', status: 'Active', skills: ['People', 'Process'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op24', name: 'Floris', type: 'Coordinator', status: 'Active', skills: ['Process', 'People'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  // Coordinators (Team Coordinators) - each has all 3 TC skills: Process, People, Off Process
+  { id: 'op10', name: 'Giedrius', type: 'Coordinator', status: 'Active', skills: ['Process', 'People', 'Off Process'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op11', name: 'Natalia', type: 'Coordinator', status: 'Active', skills: ['People', 'Process', 'Off Process'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op24', name: 'Floris', type: 'Coordinator', status: 'Active', skills: ['Process', 'People', 'Off Process'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
 ];

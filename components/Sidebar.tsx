@@ -18,38 +18,27 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isOpen, togg
   ];
 
   const getThemeStyles = () => {
-    switch (theme) {
-      case 'Midnight':
-        return {
-          bg: 'bg-[#0f172a] border-r border-slate-800',
-          text: 'text-slate-400',
-          activeBg: 'bg-indigo-500/10 text-indigo-400 border-l-2 border-indigo-500',
-          hoverBg: 'hover:bg-slate-800 hover:text-slate-200',
-          heading: 'text-slate-500',
-          accent: 'bg-indigo-500',
-          footer: 'bg-[#0f172a] border-t border-slate-800'
-        };
-      case 'Minimal':
-        return {
-          bg: 'bg-white border-r border-gray-100',
-          text: 'text-stone-500',
-          activeBg: 'bg-stone-100 text-stone-900 font-bold',
-          hoverBg: 'hover:bg-stone-50 hover:text-stone-700',
-          heading: 'text-stone-400',
-          accent: 'bg-stone-800',
-          footer: 'bg-stone-50 border-t border-stone-100'
-        };
-      default: // Modern & Executive
-        return {
-          bg: 'bg-[#0f172a]',
-          text: 'text-slate-400',
-          activeBg: 'bg-blue-600/10 text-blue-400',
-          hoverBg: 'hover:bg-slate-800/50 hover:text-slate-100',
-          heading: 'text-slate-500',
-          accent: 'bg-blue-500',
-          footer: 'border-t border-slate-800/50'
-        };
+    if (theme === 'Midnight') {
+      return {
+        bg: 'bg-[#0f172a] border-r border-slate-800',
+        text: 'text-slate-400',
+        activeBg: 'bg-indigo-500/10 text-indigo-400 border-l-2 border-indigo-500',
+        hoverBg: 'hover:bg-slate-800 hover:text-slate-200',
+        heading: 'text-slate-500',
+        accent: 'bg-indigo-500',
+        footer: 'bg-[#0f172a] border-t border-slate-800'
+      };
     }
+    // Modern (default)
+    return {
+      bg: 'bg-[#0f172a]',
+      text: 'text-slate-400',
+      activeBg: 'bg-blue-600/10 text-blue-400',
+      hoverBg: 'hover:bg-slate-800/50 hover:text-slate-100',
+      heading: 'text-slate-500',
+      accent: 'bg-blue-500',
+      footer: 'border-t border-slate-800/50'
+    };
   };
 
   const styles = getThemeStyles();
@@ -66,13 +55,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isOpen, togg
       <div className={`fixed inset-y-0 left-0 z-40 w-72 transform transition-all duration-300 ease-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col shadow-2xl lg:shadow-none ${isOpen ? 'translate-x-0' : '-translate-x-full'} ${styles.bg}`}>
         
         {/* Brand Header */}
-        <div className={`h-20 flex items-center px-8 ${theme === 'Minimal' ? 'border-b border-gray-100' : 'border-b border-slate-800/50'}`}>
+        <div className="h-20 flex items-center px-8 border-b border-slate-800/50">
           <div className="flex items-center gap-3">
-            <div className={`h-8 w-8 rounded-lg flex items-center justify-center shadow-lg ${theme === 'Minimal' ? 'bg-stone-900 text-white' : 'bg-blue-600 text-white'}`}>
+            <div className="h-8 w-8 rounded-lg flex items-center justify-center shadow-lg bg-blue-600 text-white">
               <Box className="h-5 w-5" />
             </div>
             <div>
-              <h1 className={`font-bold text-base tracking-tight leading-none ${theme === 'Minimal' ? 'text-stone-900' : 'text-white'}`}>Lord of the Bins</h1>
+              <h1 className="font-bold text-base tracking-tight leading-none text-white">Lord of the Bins</h1>
               <span className={`text-[10px] font-medium uppercase tracking-wider ${styles.heading}`}>Decanting Dept</span>
             </div>
           </div>
@@ -113,16 +102,16 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isOpen, togg
         
         {/* Footer / Context */}
         <div className={`p-4 ${styles.footer}`}>
-          <div className={`rounded-lg p-4 border ${theme === 'Minimal' ? 'bg-white border-gray-200' : theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-slate-800/50 border-slate-700/50'}`}>
+          <div className={`rounded-lg p-4 border ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-slate-800/50 border-slate-700/50'}`}>
              <div className="flex items-center justify-between mb-2">
-                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${theme === 'Minimal' ? 'bg-stone-100 text-stone-600' : 'bg-blue-400/10 text-blue-400'}`}>Current Cycle</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-400/10 text-blue-400">Current Cycle</span>
                 <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
              </div>
-             <p className={`text-xl font-bold tracking-tight ${theme === 'Minimal' ? 'text-stone-900' : 'text-white'}`}>Week 50</p>
+             <p className="text-xl font-bold tracking-tight text-white">Week 50</p>
              <p className={`text-xs font-medium mt-0.5 ${styles.heading}`}>Dec 8 - Dec 12, 2024</p>
           </div>
-          
-          <button className={`flex items-center gap-3 px-4 py-3 mt-2 text-sm font-medium w-full transition-colors rounded-lg ${theme === 'Minimal' ? 'text-stone-500 hover:text-stone-900 hover:bg-stone-100' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
+
+          <button className="flex items-center gap-3 px-4 py-3 mt-2 text-sm font-medium w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800">
             <LogOut className="h-4 w-4" />
             <span>Sign Out</span>
           </button>

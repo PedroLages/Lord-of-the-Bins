@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
@@ -8,7 +8,7 @@ import {
   Layout, Moon, Grid, LayoutDashboard, LogOut, Menu, Box, Zap,
   TrendingUp, Activity, PieChart, Bell, Globe, Lock, Unlock, AlertTriangle,
   ArrowRight, Briefcase, Award, UserCheck, Sliders, Puzzle, Shield,
-  Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3
+  Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X
 } from 'lucide-react';
 import {
   Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay
@@ -31,10 +31,12 @@ import {
   logOperatorUpdated,
   getRelativeTime
 } from './services/activityLogService';
+import { useStorage } from './hooks/useStorage';
+import { getStorageEstimate, storage } from './services/storage';
 
 // --- Theme Configuration ---
 
-type Theme = 'Modern' | 'Executive' | 'Midnight' | 'Minimal';
+type Theme = 'Modern' | 'Midnight';
 
 const THEME_STYLES = {
   Modern: {
@@ -51,21 +53,7 @@ const THEME_STYLES = {
     secondaryBtn: 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 rounded-xl',
     accent: 'blue',
   },
-  Executive: {
-    bg: 'bg-gray-100',
-    text: 'text-gray-900',
-    muted: 'text-gray-600',
-    sidebar: 'hidden',
-    layout: 'topbar',
-    card: 'bg-white rounded-none shadow-sm border border-gray-300',
-    cardHeader: 'border-b border-gray-300 bg-gray-100',
-    gridHeader: 'bg-gray-200 text-gray-800 font-bold text-xs uppercase border-b border-gray-300',
-    cell: 'border-r border-b border-gray-200',
-    primaryBtn: 'bg-slate-800 text-white rounded-sm hover:bg-slate-900',
-    secondaryBtn: 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-sm',
-    accent: 'slate',
-  },
-  Midnight: { // Formerly Neon
+  Midnight: {
     bg: 'bg-[#0f172a]',
     text: 'text-slate-200',
     muted: 'text-slate-500',
@@ -78,24 +66,25 @@ const THEME_STYLES = {
     primaryBtn: 'bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-500 transition-colors',
     secondaryBtn: 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 rounded-lg',
     accent: 'indigo',
-  },
-  Minimal: {
-    bg: 'bg-[#fdfbf7]', // Warm stone
-    text: 'text-stone-800',
-    muted: 'text-stone-500',
-    sidebar: 'minimal',
-    layout: 'sidebar',
-    card: 'bg-white rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-0',
-    cardHeader: 'border-b border-stone-100 bg-transparent',
-    gridHeader: 'bg-transparent text-stone-500 font-medium border-b border-stone-100',
-    cell: 'border-r-0 border-b border-stone-50', // No vertical lines
-    primaryBtn: 'bg-stone-800 text-white rounded-full hover:bg-stone-700 px-6',
-    secondaryBtn: 'bg-transparent text-stone-600 hover:bg-stone-100 rounded-full',
-    accent: 'stone',
   }
 };
 
 function App() {
+  // Storage hook - handles persistence
+  const {
+    loadingState,
+    error: storageError,
+    isFirstTime,
+    initialData,
+    saveOperators,
+    saveOperator,
+    saveTasks,
+    saveTask,
+    saveSchedule,
+    saveSettings,
+    exportData,
+  } = useStorage();
+
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -103,17 +92,75 @@ function App() {
   // Toast system
   const toast = useToasts();
 
+  // Track if initial data has been loaded
+  const [dataInitialized, setDataInitialized] = useState(false);
+
   // Flex operator editing state
   const [editingFlexName, setEditingFlexName] = useState<string | null>(null);
   const [flexNameInput, setFlexNameInput] = useState('');
 
-  // App State
-  const [operators, setOperators] = useState<Operator[]>(MOCK_OPERATORS);
-  const [tasks, setTasks] = useState<TaskType[]>(MOCK_TASKS);
+  // App State - will be populated from storage
+  const [operators, setOperators] = useState<Operator[]>([]);
+  const [tasks, setTasks] = useState<TaskType[]>([]);
 
   // Week Navigation State - Initialize with current week dynamically
   const [currentWeek, setCurrentWeek] = useState<WeeklySchedule>(() => createEmptyWeek(new Date()));
   const [scheduleHistory, setScheduleHistory] = useState<Record<string, WeeklySchedule>>({});
+
+  // Initialize state from storage when data is loaded
+  useEffect(() => {
+    if (loadingState === 'ready' && initialData && !dataInitialized) {
+      setOperators(initialData.operators);
+      setTasks(initialData.tasks);
+      setScheduleHistory(initialData.schedules);
+      setTheme(initialData.theme);
+      setSchedulingRules(initialData.schedulingRules);
+
+      // Try to load current week from schedule history
+      const now = new Date();
+      const currentWeekSchedule = createEmptyWeek(now);
+      const existingSchedule = initialData.schedules[currentWeekSchedule.id];
+      if (existingSchedule) {
+        setCurrentWeek(existingSchedule);
+      }
+
+      setDataInitialized(true);
+
+      if (isFirstTime) {
+        toast.info('Welcome! Default data has been loaded.');
+      }
+    }
+  }, [loadingState, initialData, dataInitialized, isFirstTime]);
+
+  // Auto-save operators when they change
+  useEffect(() => {
+    if (dataInitialized && operators.length > 0) {
+      saveOperators(operators);
+    }
+  }, [operators, dataInitialized, saveOperators]);
+
+  // Auto-save tasks when they change
+  useEffect(() => {
+    if (dataInitialized && tasks.length > 0) {
+      saveTasks(tasks);
+    }
+  }, [tasks, dataInitialized, saveTasks]);
+
+  // Auto-save current week schedule when it changes
+  useEffect(() => {
+    if (dataInitialized && currentWeek) {
+      saveSchedule(currentWeek);
+    }
+  }, [currentWeek, dataInitialized, saveSchedule]);
+
+  // Auto-save schedule history when it changes
+  useEffect(() => {
+    if (dataInitialized) {
+      Object.values(scheduleHistory).forEach(schedule => {
+        saveSchedule(schedule);
+      });
+    }
+  }, [scheduleHistory, dataInitialized, saveSchedule]);
 
   // Publish Modal State
   const [showPublishModal, setShowPublishModal] = useState(false);
@@ -135,7 +182,12 @@ function App() {
   }, []);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'tasks' | 'automation' | 'integrations'>('tasks');
+  const [settingsTab, setSettingsTab] = useState<'tasks' | 'automation' | 'integrations' | 'data'>('tasks');
+
+  // Data Management State
+  const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null);
+  const [showClearDataModal, setShowClearDataModal] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   // Team Filter State
   const [teamFilter, setTeamFilter] = useState<'All' | 'Regular' | 'Flex' | 'Coordinator'>('All');
@@ -160,6 +212,11 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedCell, setSelectedCell] = useState<{opId: string, dayIndex: number} | null>(null);
   const [dragInfo, setDragInfo] = useState<{opId: string; dayIndex: number; taskId: string | null} | null>(null);
+
+  // Multi-cell selection state
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // format: "opId-dayIndex"
+  const [selectionAnchor, setSelectionAnchor] = useState<{opId: string, dayIndex: number} | null>(null);
+  const [showBulkAssignMenu, setShowBulkAssignMenu] = useState(false);
 
   // Modal State
   const [isOperatorModalOpen, setIsOperatorModalOpen] = useState(false);
@@ -190,6 +247,13 @@ function App() {
   // Scheduling State (moved before stats useMemo to avoid reference error)
   const [schedulingRules, setSchedulingRules] = useState<SchedulingRules>(DEFAULT_RULES);
   const [scheduleWarnings, setScheduleWarnings] = useState<ScheduleWarning[]>([]);
+
+  // Auto-save settings (theme + scheduling rules) when they change
+  useEffect(() => {
+    if (dataInitialized) {
+      saveSettings(theme, schedulingRules);
+    }
+  }, [theme, schedulingRules, dataInitialized, saveSettings]);
 
   // --- Statistics ---
   const stats = useMemo(() => {
@@ -368,10 +432,14 @@ function App() {
       day.assignments[opId] = { taskId: null, locked: false };
     }
 
+    // If selecting "Off/Unassigned" (null), clear pinned status so Smart Fill can reassign
+    // If selecting a real task, mark as pinned to protect from Smart Fill
+    const isPinned = taskId !== null;
     day.assignments[opId] = {
       ...day.assignments[opId],
       taskId: taskId,
-      locked: true
+      locked: isPinned,
+      pinned: isPinned,
     };
 
     setCurrentWeek(newSchedule);
@@ -460,6 +528,145 @@ function App() {
     const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
     setScheduleWarnings(warnings);
   };
+
+  // --- Multi-Cell Selection Handlers ---
+
+  // Helper to create cell key
+  const getCellKey = (opId: string, dayIndex: number) => `${opId}-${dayIndex}`;
+
+  // Check if a cell is in the multi-selection
+  const isCellSelected = (opId: string, dayIndex: number) => selectedCells.has(getCellKey(opId, dayIndex));
+
+  // Handle cell click with modifiers for multi-selection
+  const handleCellClick = (opId: string, dayIndex: number, event: React.MouseEvent) => {
+    if (currentWeek.locked) return;
+
+    const cellKey = getCellKey(opId, dayIndex);
+
+    // Ctrl/Cmd + Click: Toggle individual cell or start selection
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      setSelectedCell(null); // Close single-cell popover
+
+      setSelectedCells(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(cellKey)) {
+          newSet.delete(cellKey);
+        } else {
+          newSet.add(cellKey);
+        }
+        return newSet;
+      });
+
+      // Set anchor for range selection
+      setSelectionAnchor({ opId, dayIndex });
+      return;
+    }
+
+    // Shift + Click: Select range from anchor
+    if (event.shiftKey && selectionAnchor && selectionAnchor.opId === opId) {
+      event.preventDefault();
+      setSelectedCell(null);
+
+      const startDay = Math.min(selectionAnchor.dayIndex, dayIndex);
+      const endDay = Math.max(selectionAnchor.dayIndex, dayIndex);
+
+      setSelectedCells(prev => {
+        const newSet = new Set(prev);
+        for (let d = startDay; d <= endDay; d++) {
+          newSet.add(getCellKey(opId, d));
+        }
+        return newSet;
+      });
+      return;
+    }
+
+    // Regular click: If we have multi-selection, show bulk assign menu
+    if (selectedCells.size > 0) {
+      // If clicking on a selected cell, show bulk assign menu
+      if (selectedCells.has(cellKey)) {
+        setShowBulkAssignMenu(true);
+        return;
+      }
+      // Clicking on unselected cell clears selection and opens normal popover
+      setSelectedCells(new Set());
+      setSelectionAnchor(null);
+    }
+
+    // Normal single-cell selection (popover)
+    setSelectedCell({ opId, dayIndex });
+  };
+
+  // Bulk assign task to all selected cells
+  const handleBulkAssign = (taskId: string | null) => {
+    if (selectedCells.size === 0 || currentWeek.locked) return;
+
+    const newSchedule = { ...currentWeek };
+    let assignmentCount = 0;
+
+    selectedCells.forEach(cellKey => {
+      const [opId, dayIndexStr] = cellKey.split('-');
+      const dayIndex = parseInt(dayIndexStr, 10);
+      const day = newSchedule.days[dayIndex];
+
+      if (!day.assignments[opId]) {
+        day.assignments[opId] = { taskId: null, locked: false };
+      }
+
+      // If selecting "Off/Unassigned" (null), clear pinned status so Smart Fill can reassign
+      // If selecting a real task, mark as pinned to protect from Smart Fill
+      const isPinned = taskId !== null;
+      day.assignments[opId] = {
+        ...day.assignments[opId],
+        taskId,
+        locked: isPinned,
+        pinned: isPinned,
+      };
+      assignmentCount++;
+    });
+
+    setCurrentWeek(newSchedule);
+
+    // Clear selection after assignment
+    setSelectedCells(new Set());
+    setSelectionAnchor(null);
+    setShowBulkAssignMenu(false);
+
+    // Log the bulk assignment
+    const taskName = taskId ? tasks.find(t => t.id === taskId)?.name || 'Task' : 'Off';
+    const entry = logAssignmentChange(
+      `${assignmentCount} cells`,
+      'multiple days',
+      null,
+      taskName
+    );
+    setActivityLog(prev => [entry, ...prev]);
+
+    // Show toast
+    toast.success(`Assigned "${taskName}" to ${assignmentCount} cells`);
+
+    // Run validation
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
+    setScheduleWarnings(warnings);
+  };
+
+  // Clear multi-selection on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedCells.size > 0) {
+        setSelectedCells(new Set());
+        setSelectionAnchor(null);
+        setShowBulkAssignMenu(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedCells.size]);
 
   // --- Week Navigation Handlers ---
 
@@ -569,8 +776,8 @@ function App() {
     try {
       const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
-      // Build current assignments map for the algorithm
-      const currentAssignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+      // Build current assignments map for the algorithm (include pinned field)
+      const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
       currentWeek.days.forEach((day, idx) => {
         currentAssignmentsMap[idx] = day.assignments;
       });
@@ -587,18 +794,39 @@ function App() {
         const newSchedule = { ...currentWeek };
         let assignmentCount = 0;
 
+        // First, clear assignments for operators on days they're NOT available
+        // (unless the assignment is locked or pinned)
+        daysList.forEach((day, dayIndex) => {
+          operators.forEach(op => {
+            const existingAssignment = newSchedule.days[dayIndex]?.assignments[op.id];
+            // If operator is NOT available on this day AND has an assignment that's not locked/pinned
+            if (!op.availability[day] && existingAssignment && existingAssignment.taskId) {
+              if (!existingAssignment.locked && !existingAssignment.pinned) {
+                // Clear the assignment - operator is not available
+                newSchedule.days[dayIndex].assignments[op.id] = {
+                  taskId: null,
+                  locked: false,
+                  pinned: false
+                };
+              }
+            }
+          });
+        });
+
         result.assignments.forEach((assignment) => {
           const dayIndex = daysList.indexOf(assignment.day as WeekDay);
           if (dayIndex === -1) return;
 
           const currentAssignment = newSchedule.days[dayIndex].assignments[assignment.operatorId];
-          if (currentAssignment && currentAssignment.locked) return;
+          // Skip locked AND pinned assignments
+          if (currentAssignment && (currentAssignment.locked || currentAssignment.pinned)) return;
 
           const task = tasks.find(t => t.id === assignment.taskId);
           if (task) {
             newSchedule.days[dayIndex].assignments[assignment.operatorId] = {
               taskId: task.id,
-              locked: false
+              locked: false,
+              pinned: false
             };
             assignmentCount++;
           }
@@ -643,6 +871,38 @@ function App() {
     }
   };
 
+  // Clear all assignments (except locked ones)
+  const handleClearSchedule = () => {
+    if (currentWeek.locked) return;
+
+    const newSchedule = { ...currentWeek };
+    let clearedCount = 0;
+
+    newSchedule.days.forEach(day => {
+      Object.keys(day.assignments).forEach(opId => {
+        const assignment = day.assignments[opId];
+        // Only clear if not locked
+        if (!assignment.locked && assignment.taskId) {
+          day.assignments[opId] = {
+            taskId: null,
+            locked: false,
+            pinned: false
+          };
+          clearedCount++;
+        }
+      });
+    });
+
+    setCurrentWeek(newSchedule);
+    setScheduleWarnings([]);
+
+    if (clearedCount > 0) {
+      toast.success('Schedule Cleared', `${clearedCount} assignment${clearedCount > 1 ? 's' : ''} removed`);
+    } else {
+      toast.info('Nothing to Clear', 'No assignments to remove');
+    }
+  };
+
   // --- Render Helpers ---
 
   const getTaskStyle = (taskId: string | null) => {
@@ -659,26 +919,7 @@ function App() {
       };
     }
 
-    if (theme === 'Minimal') {
-       return {
-         backgroundColor: task.color + '20', // Low opacity
-         color: task.color === '#ffffff' ? '#333' : '#000', // Ensure readability
-         borderLeft: `4px solid ${task.color}`,
-         borderRadius: '4px'
-       }
-    }
-
-    if (theme === 'Executive') {
-      return {
-        backgroundColor: task.color,
-        color: task.textColor,
-        borderRadius: '2px',
-        fontSize: '11px',
-        fontWeight: '600'
-      }
-    }
-
-    // Modern (Default)
+    // Modern theme (default)
     return {
       backgroundColor: task.color,
       color: task.textColor,
@@ -748,10 +989,8 @@ function App() {
           <div className={`mb-2 p-2 rounded-xl shadow-xl border flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-5 duration-200 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'}`}>
              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>Select Theme</span>
              {[
-               { id: 'Modern', icon: Layout, label: 'Modern UI' },
-               { id: 'Executive', icon: Monitor, label: 'Executive' },
-               { id: 'Midnight', icon: Moon, label: 'Dark Mode' },
-               { id: 'Minimal', icon: Grid, label: 'Minimal' }
+               { id: 'Modern', icon: Layout, label: 'Light Mode' },
+               { id: 'Midnight', icon: Moon, label: 'Dark Mode' }
              ].map((t) => (
                <button
                  key={t.id}
@@ -919,7 +1158,142 @@ function App() {
 
          {/* 3. Feed / Notifications Column */}
          <div className="space-y-6">
-            <div className={`h-full flex flex-col ${styles.card}`}>
+            {/* Notifications Panel */}
+            {(() => {
+               // Build notifications list
+               const notifications: { id: string; type: 'warning' | 'info' | 'success'; title: string; message: string; action?: () => void }[] = [];
+
+               // Check for operators on leave/sick
+               const unavailableOps = operators.filter(op => op.status === 'Sick' || op.status === 'Leave');
+               if (unavailableOps.length > 0) {
+                  notifications.push({
+                     id: 'unavailable-staff',
+                     type: 'warning',
+                     title: `${unavailableOps.length} Staff Unavailable`,
+                     message: unavailableOps.map(op => `${op.name} (${op.status})`).join(', '),
+                     action: () => setActiveTab('team')
+                  });
+               }
+
+               // Check if schedule is still draft
+               if (currentWeek.status === 'Draft' && stats.coverage > 50) {
+                  notifications.push({
+                     id: 'unpublished-schedule',
+                     type: 'info',
+                     title: 'Schedule Not Published',
+                     message: `${getWeekLabel(currentWeek)} is ${stats.coverage}% complete but still in draft`,
+                     action: () => setShowPublishModal(true)
+                  });
+               }
+
+               // Check for schedule warnings
+               if (scheduleWarnings.length > 0) {
+                  const skillMismatches = scheduleWarnings.filter(w => w.type === 'skill_mismatch').length;
+                  const understaffed = scheduleWarnings.filter(w => w.type === 'understaffed').length;
+
+                  if (skillMismatches > 0) {
+                     notifications.push({
+                        id: 'skill-warnings',
+                        type: 'warning',
+                        title: `${skillMismatches} Skill Mismatch${skillMismatches > 1 ? 'es' : ''}`,
+                        message: 'Some operators assigned to tasks they lack skills for',
+                        action: () => setActiveTab('schedule')
+                     });
+                  }
+
+                  if (understaffed > 0) {
+                     notifications.push({
+                        id: 'understaffed-warnings',
+                        type: 'warning',
+                        title: `${understaffed} Understaffed Task${understaffed > 1 ? 's' : ''}`,
+                        message: 'Some tasks need more operators',
+                        action: () => setActiveTab('schedule')
+                     });
+                  }
+               }
+
+               // Check for low coverage
+               if (stats.coverage < 50 && stats.coverage > 0) {
+                  notifications.push({
+                     id: 'low-coverage',
+                     type: 'warning',
+                     title: 'Low Coverage',
+                     message: `Schedule is only ${stats.coverage}% filled`,
+                     action: () => setActiveTab('schedule')
+                  });
+               }
+
+               // All clear notification
+               if (notifications.length === 0 && stats.coverage >= 80) {
+                  notifications.push({
+                     id: 'all-clear',
+                     type: 'success',
+                     title: 'Looking Good!',
+                     message: `${stats.coverage}% coverage, no pending issues`
+                  });
+               }
+
+               if (notifications.length === 0) return null;
+
+               return (
+                  <div className={`${styles.card} p-4`}>
+                     <div className="flex items-center gap-2 mb-4">
+                        <Bell className={`h-5 w-5 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600'}`} />
+                        <h3 className={`font-bold ${styles.text}`}>Notifications</h3>
+                        <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${
+                           notifications.some(n => n.type === 'warning')
+                              ? theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                              : theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'
+                        }`}>
+                           {notifications.length}
+                        </span>
+                     </div>
+                     <div className="space-y-3">
+                        {notifications.map(notif => (
+                           <div
+                              key={notif.id}
+                              className={`p-3 rounded-xl border transition-colors ${
+                                 notif.type === 'warning'
+                                    ? theme === 'Midnight' ? 'bg-amber-900/10 border-amber-900/30' : 'bg-amber-50 border-amber-200'
+                                    : notif.type === 'success'
+                                    ? theme === 'Midnight' ? 'bg-emerald-900/10 border-emerald-900/30' : 'bg-emerald-50 border-emerald-200'
+                                    : theme === 'Midnight' ? 'bg-blue-900/10 border-blue-900/30' : 'bg-blue-50 border-blue-200'
+                              } ${notif.action ? 'cursor-pointer hover:brightness-95' : ''}`}
+                              onClick={notif.action}
+                           >
+                              <div className="flex items-start gap-3">
+                                 <div className={`p-1.5 rounded-lg shrink-0 ${
+                                    notif.type === 'warning'
+                                       ? theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-600'
+                                       : notif.type === 'success'
+                                       ? theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-600'
+                                       : theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+                                 }`}>
+                                    {notif.type === 'warning' ? (
+                                       <AlertTriangle className="h-4 w-4" />
+                                    ) : notif.type === 'success' ? (
+                                       <CheckCircle2 className="h-4 w-4" />
+                                    ) : (
+                                       <Bell className="h-4 w-4" />
+                                    )}
+                                 </div>
+                                 <div className="flex-1 min-w-0">
+                                    <p className={`text-sm font-semibold ${styles.text}`}>{notif.title}</p>
+                                    <p className={`text-xs mt-0.5 ${styles.muted} line-clamp-2`}>{notif.message}</p>
+                                 </div>
+                                 {notif.action && (
+                                    <ChevronRight className={`h-4 w-4 shrink-0 ${styles.muted}`} />
+                                 )}
+                              </div>
+                           </div>
+                        ))}
+                     </div>
+                  </div>
+               );
+            })()}
+
+            {/* Recent Activity */}
+            <div className={`flex flex-col ${styles.card}`}>
                <div className={`p-6 ${styles.cardHeader}`}>
                   <h3 className={`font-bold ${styles.text}`}>Recent Activity</h3>
                </div>
@@ -981,9 +1355,60 @@ function App() {
     </div>
   );
 
+  // Archive/Restore handlers
+  const [showArchived, setShowArchived] = useState(false);
+
+  const handleArchiveOperator = (opId: string) => {
+    const op = operators.find(o => o.id === opId);
+    if (!op) return;
+
+    setOperators(prev => prev.map(o =>
+      o.id === opId
+        ? { ...o, archived: true, archivedAt: new Date().toISOString() }
+        : o
+    ));
+
+    // Remove from any schedule assignments
+    const newSchedule = { ...currentWeek };
+    newSchedule.days.forEach(day => {
+      if (day.assignments[opId]) {
+        delete day.assignments[opId];
+      }
+    });
+    setCurrentWeek(newSchedule);
+
+    toast.info('Operator Archived', `${op.name} has been archived and can be restored later`);
+  };
+
+  const handleRestoreOperator = (opId: string) => {
+    const op = operators.find(o => o.id === opId);
+    if (!op) return;
+
+    setOperators(prev => prev.map(o =>
+      o.id === opId
+        ? { ...o, archived: false, archivedAt: undefined }
+        : o
+    ));
+
+    toast.success('Operator Restored', `${op.name} has been restored to active roster`);
+  };
+
+  const handlePermanentDelete = (opId: string) => {
+    const op = operators.find(o => o.id === opId);
+    if (!op) return;
+
+    if (confirm(`Permanently delete ${op.name}? This cannot be undone.`)) {
+      setOperators(prev => prev.filter(o => o.id !== opId));
+      toast.info('Operator Deleted', `${op.name} has been permanently deleted`);
+    }
+  };
+
   const renderTeamView = () => {
     // Filter Logic with Search
-    const filteredOperators = operators.filter(op => {
+    const archivedOperators = operators.filter(op => op.archived);
+    const activeOperators = operators.filter(op => !op.archived);
+
+    const filteredOperators = (showArchived ? archivedOperators : activeOperators).filter(op => {
       const matchRole = teamFilter === 'All' || op.type === teamFilter;
       const matchStatus = statusFilter === 'All' || op.status === statusFilter;
 
@@ -1019,10 +1444,10 @@ function App() {
          {/* 1. Stats Ribbon */}
          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'Total Headcount', val: operators.length, sub: 'Active', icon: Users, color: 'text-blue-500' },
-              { label: 'Certified Trainers', val: operators.filter(o => o.skills.includes('Trainer')).length, sub: 'Available', icon: Award, color: 'text-amber-500' },
-              { label: 'Flex Ratio', val: '24%', sub: 'Target: 20%', icon: TrendingUp, color: 'text-purple-500' },
-              { label: 'On Leave', val: operators.filter(o => o.status === 'Leave').length, sub: 'This Week', icon: Calendar, color: 'text-red-500' },
+              { label: 'Total Headcount', val: activeOperators.length, sub: showArchived ? `(${archivedOperators.length} archived)` : 'Active', icon: Users, color: 'text-blue-500' },
+              { label: 'Certified Trainers', val: activeOperators.filter(o => o.skills.includes('Trainer')).length, sub: 'Available', icon: Award, color: 'text-amber-500' },
+              { label: 'Flex Ratio', val: `${Math.round((activeOperators.filter(o => o.type === 'Flex').length / Math.max(activeOperators.length, 1)) * 100)}%`, sub: 'Target: 20%', icon: TrendingUp, color: 'text-purple-500' },
+              { label: 'On Leave', val: activeOperators.filter(o => o.status === 'Leave').length, sub: 'This Week', icon: Calendar, color: 'text-red-500' },
             ].map((stat, i) => (
               <div key={i} className={`p-4 flex items-center gap-4 ${styles.card}`}>
                  <div className={`p-3 rounded-xl ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'}`}>
@@ -1058,7 +1483,7 @@ function App() {
                {/* Status Filter */}
                <div className={`flex items-center gap-2 p-1 rounded-xl border px-3 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200 shadow-sm'}`}>
                   <span className={`text-xs font-bold uppercase tracking-wide mr-1 ${styles.muted}`}>Status:</span>
-                  <select 
+                  <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value as any)}
                     className={`bg-transparent text-sm font-semibold outline-none ${styles.text}`}
@@ -1069,6 +1494,25 @@ function App() {
                      <option value="Leave">On Leave</option>
                   </select>
                </div>
+
+               {/* Archive Toggle */}
+               {archivedOperators.length > 0 && (
+                 <button
+                   onClick={() => setShowArchived(!showArchived)}
+                   className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-colors ${
+                     showArchived
+                       ? theme === 'Midnight'
+                         ? 'bg-amber-500/20 border-amber-500/30 text-amber-400'
+                         : 'bg-amber-50 border-amber-200 text-amber-700'
+                       : theme === 'Midnight'
+                       ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                       : 'bg-white border-gray-200 text-gray-500 hover:text-gray-700 shadow-sm'
+                   }`}
+                 >
+                   <Trash2 className="h-4 w-4" />
+                   {showArchived ? 'Hide Archived' : `Archived (${archivedOperators.length})`}
+                 </button>
+               )}
             </div>
 
             <div className="flex gap-3 w-full md:w-auto">
@@ -1161,9 +1605,17 @@ function App() {
            /* CARD VIEW */
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredOperators.map((op) => (
-              <div key={op.id} className={`group relative flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl overflow-hidden ${styles.card}`}>
+              <div key={op.id} className={`group relative flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl overflow-hidden ${styles.card} ${op.archived ? 'opacity-75' : ''}`}>
                  {/* Top Status Bar */}
-                 <div className={`h-1.5 w-full ${op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                 <div className={`h-1.5 w-full ${op.archived ? 'bg-gray-400' : op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                 {/* Archived Badge */}
+                 {op.archived && (
+                   <div className={`absolute top-3 right-3 px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                     theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                   }`}>
+                     Archived
+                   </div>
+                 )}
 
                  <div className="p-5 flex-1 flex flex-col">
                     {/* Header */}
@@ -1250,22 +1702,53 @@ function App() {
                                 ))}
                               </div>
                               <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
-                                <button
-                                  onClick={() => {
-                                    if (confirm(`Delete ${op.name}? This cannot be undone.`)) {
-                                      setOperators(prev => prev.filter(o => o.id !== op.id));
-                                    }
-                                    setOpenOperatorMenu(null);
-                                  }}
-                                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-                                    theme === 'Midnight'
-                                      ? 'text-red-400 hover:bg-red-500/10'
-                                      : 'text-red-600 hover:bg-red-50'
-                                  }`}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                  Delete Operator
-                                </button>
+                                {op.archived ? (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        handleRestoreOperator(op.id);
+                                        setOpenOperatorMenu(null);
+                                      }}
+                                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                        theme === 'Midnight'
+                                          ? 'text-emerald-400 hover:bg-emerald-500/10'
+                                          : 'text-emerald-600 hover:bg-emerald-50'
+                                      }`}
+                                    >
+                                      <UserCheck className="h-4 w-4" />
+                                      Restore Operator
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        handlePermanentDelete(op.id);
+                                        setOpenOperatorMenu(null);
+                                      }}
+                                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                        theme === 'Midnight'
+                                          ? 'text-red-400 hover:bg-red-500/10'
+                                          : 'text-red-600 hover:bg-red-50'
+                                      }`}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      Delete Permanently
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      handleArchiveOperator(op.id);
+                                      setOpenOperatorMenu(null);
+                                    }}
+                                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                      theme === 'Midnight'
+                                        ? 'text-amber-400 hover:bg-amber-500/10'
+                                        : 'text-amber-600 hover:bg-amber-50'
+                                    }`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                    Archive Operator
+                                  </button>
+                                )}
                               </div>
                             </div>
                           )}
@@ -1608,6 +2091,7 @@ function App() {
              { id: 'tasks', label: 'Task Definitions', icon: Sliders },
              { id: 'automation', label: 'Scheduling Rules', icon: Sliders },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
+             { id: 'data', label: 'Data Management', icon: Database },
            ].map((item) => (
              <button
                key={item.id}
@@ -1771,6 +2255,46 @@ function App() {
                         >+</button>
                      </div>
                   </div>
+
+                  {/* Randomization factor slider */}
+                  <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                     <div className="flex items-start justify-between mb-4">
+                        <div className="pr-8">
+                           <h3 className={`font-bold text-base ${styles.text}`}>Schedule Variety</h3>
+                           <p className="text-sm text-gray-500 mt-1">
+                              Add randomization to Smart Fill so each week generates a different schedule.
+                              Higher values create more variety, lower values are more consistent.
+                           </p>
+                        </div>
+                        <span className={`px-3 py-1 rounded-lg font-bold text-sm shrink-0 ${
+                           schedulingRules.randomizationFactor === 0
+                              ? theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+                              : schedulingRules.randomizationFactor <= 7
+                              ? theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+                              : schedulingRules.randomizationFactor <= 14
+                              ? theme === 'Midnight' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-indigo-100 text-indigo-600'
+                              : theme === 'Midnight' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-600'
+                        }`}>
+                           {schedulingRules.randomizationFactor === 0 ? 'Off' :
+                            schedulingRules.randomizationFactor <= 7 ? 'Low' :
+                            schedulingRules.randomizationFactor <= 14 ? 'Medium' : 'High'}
+                        </span>
+                     </div>
+                     <div className="flex items-center gap-4">
+                        <span className={`text-xs ${styles.muted}`}>Consistent</span>
+                        <input
+                           type="range"
+                           min="0"
+                           max="20"
+                           value={schedulingRules.randomizationFactor}
+                           onChange={(e) => setSchedulingRules(prev => ({ ...prev, randomizationFactor: parseInt(e.target.value, 10) }))}
+                           className={`flex-1 h-2 rounded-full appearance-none cursor-pointer ${
+                              theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-200'
+                           } [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-md`}
+                        />
+                        <span className={`text-xs ${styles.muted}`}>Varied</span>
+                     </div>
+                  </div>
                </div>
              </div>
            )}
@@ -1789,7 +2313,7 @@ function App() {
                         <div key={i} className={`p-6 rounded-2xl border flex flex-col gap-4 ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
                            <div className="flex justify-between items-start">
                               <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-white shadow-sm'}`}>
-                                 <Box className="h-6 w-6" /> 
+                                 <Box className="h-6 w-6" />
                               </div>
                               <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded-full ${
                                  app.status === 'Connected' ? 'bg-emerald-500/10 text-emerald-500' :
@@ -1809,13 +2333,178 @@ function App() {
               </div>
            )}
 
+           {settingsTab === 'data' && (
+              <div className="space-y-8">
+                  <div className="mb-6">
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Data Management</h2>
+                       <p className={`text-sm ${styles.muted}`}>Export, import, and manage your application data.</p>
+                  </div>
+
+                  {/* Storage Usage */}
+                  <div className={`p-6 rounded-2xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                     <div className="flex items-center gap-3 mb-4">
+                        <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-blue-50 text-blue-600'}`}>
+                           <Database className="h-5 w-5" />
+                        </div>
+                        <div>
+                           <h3 className={`font-bold ${styles.text}`}>Storage Usage</h3>
+                           <p className={`text-xs ${styles.muted}`}>Local database (IndexedDB)</p>
+                        </div>
+                     </div>
+                     {storageUsage ? (
+                        <div className="space-y-2">
+                           <div className="flex justify-between text-sm">
+                              <span className={styles.muted}>Used</span>
+                              <span className={`font-medium ${styles.text}`}>
+                                 {(storageUsage.usage / 1024 / 1024).toFixed(2)} MB
+                              </span>
+                           </div>
+                           <div className={`h-2 rounded-full overflow-hidden ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-gray-200'}`}>
+                              <div
+                                 className={`h-full transition-all ${theme === 'Midnight' ? 'bg-indigo-500' : 'bg-blue-500'}`}
+                                 style={{ width: `${Math.min((storageUsage.usage / storageUsage.quota) * 100, 100)}%` }}
+                              />
+                           </div>
+                           <div className="flex justify-between text-xs">
+                              <span className={styles.muted}>
+                                 {((storageUsage.usage / storageUsage.quota) * 100).toFixed(1)}% of available storage
+                              </span>
+                              <span className={styles.muted}>
+                                 {(storageUsage.quota / 1024 / 1024).toFixed(0)} MB quota
+                              </span>
+                           </div>
+                        </div>
+                     ) : (
+                        <button
+                           onClick={async () => {
+                              const estimate = await getStorageEstimate();
+                              if (estimate) setStorageUsage(estimate);
+                           }}
+                           className={`text-sm font-medium ${theme === 'Midnight' ? 'text-indigo-400 hover:text-indigo-300' : 'text-blue-600 hover:text-blue-700'}`}
+                        >
+                           Check storage usage
+                        </button>
+                     )}
+                  </div>
+
+                  {/* Export/Import Section */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                     {/* Export */}
+                     <div className={`p-6 rounded-2xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                        <div className="flex items-center gap-3 mb-4">
+                           <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-50 text-emerald-600'}`}>
+                              <Download className="h-5 w-5" />
+                           </div>
+                           <div>
+                              <h3 className={`font-bold ${styles.text}`}>Export Data</h3>
+                              <p className={`text-xs ${styles.muted}`}>Download a JSON backup</p>
+                           </div>
+                        </div>
+                        <p className={`text-sm mb-4 ${styles.muted}`}>
+                           Export all operators, tasks, schedules, and settings to a JSON file. Use this for backups or migrating to another device.
+                        </p>
+                        <button
+                           onClick={async () => {
+                              try {
+                                 await exportData();
+                                 addToast('success', 'Data exported successfully');
+                              } catch (err) {
+                                 addToast('error', 'Failed to export data');
+                              }
+                           }}
+                           className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                        >
+                           <Download className="inline-block h-4 w-4 mr-2" />
+                           Export JSON Backup
+                        </button>
+                     </div>
+
+                     {/* Import */}
+                     <div className={`p-6 rounded-2xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                        <div className="flex items-center gap-3 mb-4">
+                           <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-600'}`}>
+                              <Save className="h-5 w-5" />
+                           </div>
+                           <div>
+                              <h3 className={`font-bold ${styles.text}`}>Import Data</h3>
+                              <p className={`text-xs ${styles.muted}`}>Restore from JSON backup</p>
+                           </div>
+                        </div>
+                        <p className={`text-sm mb-4 ${styles.muted}`}>
+                           Import a previously exported JSON file. This will replace all current data.
+                        </p>
+                        <label className={`block w-full py-3 rounded-xl text-sm font-bold text-center cursor-pointer transition-colors ${theme === 'Midnight' ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white'} ${isImporting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                           {isImporting ? (
+                              <>
+                                 <Loader2 className="inline-block h-4 w-4 mr-2 animate-spin" />
+                                 Importing...
+                              </>
+                           ) : (
+                              <>
+                                 <Save className="inline-block h-4 w-4 mr-2" />
+                                 Import JSON Backup
+                              </>
+                           )}
+                           <input
+                              type="file"
+                              accept=".json"
+                              className="hidden"
+                              disabled={isImporting}
+                              onChange={async (e) => {
+                                 const file = e.target.files?.[0];
+                                 if (!file) return;
+
+                                 setIsImporting(true);
+                                 try {
+                                    const text = await file.text();
+                                    const data = JSON.parse(text);
+                                    await storage.importAll(data);
+                                    addToast('success', 'Data imported successfully. Reloading...');
+                                    setTimeout(() => window.location.reload(), 1500);
+                                 } catch (err) {
+                                    console.error('Import failed:', err);
+                                    addToast('error', 'Failed to import data. Please check the file format.');
+                                    setIsImporting(false);
+                                 }
+                                 e.target.value = '';
+                              }}
+                           />
+                        </label>
+                     </div>
+                  </div>
+
+                  {/* Danger Zone */}
+                  <div className={`p-6 rounded-2xl border-2 ${theme === 'Midnight' ? 'bg-red-950/20 border-red-900/50' : 'bg-red-50 border-red-200'}`}>
+                     <div className="flex items-center gap-3 mb-4">
+                        <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-red-500/10 text-red-400' : 'bg-red-100 text-red-600'}`}>
+                           <AlertTriangle className="h-5 w-5" />
+                        </div>
+                        <div>
+                           <h3 className={`font-bold ${theme === 'Midnight' ? 'text-red-400' : 'text-red-700'}`}>Danger Zone</h3>
+                           <p className={`text-xs ${theme === 'Midnight' ? 'text-red-400/70' : 'text-red-600/70'}`}>Irreversible actions</p>
+                        </div>
+                     </div>
+                     <p className={`text-sm mb-4 ${theme === 'Midnight' ? 'text-red-400/80' : 'text-red-600/80'}`}>
+                        Permanently delete all data including operators, tasks, schedules, and settings. This action cannot be undone.
+                     </p>
+                     <button
+                        onClick={() => setShowClearDataModal(true)}
+                        className={`py-3 px-6 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}
+                     >
+                        <Trash2 className="inline-block h-4 w-4 mr-2" />
+                        Clear All Data
+                     </button>
+                  </div>
+              </div>
+           )}
+
         </div>
       </div>
     </div>
   );
 
   const renderScheduleView = () => (
-    <div className="flex flex-col h-full space-y-4 pb-20">
+    <div className="flex flex-col h-full space-y-3 pb-2">
       
       {/* KPI Header */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 no-print">
@@ -1838,7 +2527,7 @@ function App() {
         <div className={`p-4 rounded-xl shadow-lg flex flex-col justify-between text-white ${
           currentWeek.status === 'Published'
             ? (currentWeek.locked ? 'bg-gradient-to-br from-emerald-600 to-teal-600' : 'bg-gradient-to-br from-blue-600 to-cyan-600')
-            : (theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : theme === 'Minimal' ? 'bg-stone-800' : 'bg-gradient-to-br from-indigo-600 to-blue-600')
+            : (theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : 'bg-gradient-to-br from-indigo-600 to-blue-600')
         }`}>
           <div>
             <p className="text-xs font-medium opacity-80 uppercase tracking-wide mb-1">Schedule Status</p>
@@ -1912,7 +2601,7 @@ function App() {
       <div ref={scheduleGridRef} id="schedule-grid" className={`flex-1 flex flex-col ${styles.card} overflow-hidden`}>
 
         {/* Toolbar */}
-        <div className={`px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 no-print z-20 ${theme === 'Minimal' ? 'border-b border-stone-100' : theme === 'Midnight' ? 'border-b border-slate-800' : 'border-b border-gray-100'}`}>
+        <div className={`px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 no-print z-20 ${theme === 'Midnight' ? 'border-b border-slate-800' : 'border-b border-gray-100'}`}>
            <div className="flex items-center gap-4">
              <h2 className={`font-bold text-lg ${styles.text}`}>Weekly Assignment</h2>
              <div className={`hidden sm:block h-4 w-px ${theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-300'}`}></div>
@@ -1979,7 +2668,16 @@ function App() {
                 )}
                 <span className="font-medium text-sm whitespace-nowrap">Smart Fill</span>
               </button>
-              
+
+              <button
+                onClick={handleClearSchedule}
+                disabled={currentWeek.locked}
+                className={`p-2.5 transition-colors ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
+                title={currentWeek.locked ? 'Unlock schedule to clear' : 'Clear all assignments'}
+              >
+                 <Trash2 className="h-5 w-5" />
+              </button>
+
               <button className={`p-2.5 transition-colors ${styles.secondaryBtn}`}>
                  <Filter className="h-5 w-5" />
               </button>
@@ -2003,7 +2701,7 @@ function App() {
           <table className="w-full border-collapse min-w-[1000px]">
             <thead className={`sticky top-0 z-30 backdrop-blur-sm ${styles.gridHeader}`}>
               <tr>
-                <th className={`p-4 text-left ${styles.cell} w-48 sm:w-64 sticky left-0 z-40 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${theme === 'Midnight' ? 'bg-slate-900/95' : theme === 'Minimal' ? 'bg-[#fffefb]/95' : 'bg-gray-50/95'}`}>
+                <th className={`p-4 text-left ${styles.cell} w-48 sm:w-64 sticky left-0 z-40 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-gray-50/95'}`}>
                   <div className="flex items-center gap-2">
                     <span>Operator</span>
                     <span className={`text-xs font-normal px-1.5 py-0.5 rounded-full ${theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-200/50 text-gray-400'}`}>{operators.length}</span>
@@ -2012,7 +2710,9 @@ function App() {
                 {currentWeek.days.map((day, idx) => (
                   <th key={idx} className={`p-3 text-left min-w-[140px] ${styles.cell}`}>
                      <div className="flex flex-col">
-                       <span className={`text-xs font-bold uppercase tracking-wider mb-1 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>{day.dayOfWeek}</span>
+                       <span className={`text-xs font-bold uppercase tracking-wider mb-1 ${
+                         theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'
+                       }`}>{day.dayOfWeek}</span>
                        <span className={`text-sm font-semibold ${styles.text}`}>{day.date.slice(5)}</span>
                      </div>
                   </th>
@@ -2153,20 +2853,30 @@ function App() {
                               e.dataTransfer.effectAllowed = 'move';
                             }}
                             onDragEnd={() => setDragInfo(null)}
-                            onClick={() => setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
+                            onClick={(e) => handleCellClick(op.id, dayIdx, e)}
                             style={getTaskStyle(taskId)}
                             className={`w-full h-full min-h-[44px] rounded-lg flex flex-col items-center justify-center p-1 transition-all duration-200 border ${
-                              !taskId
+                              isCellSelected(op.id, dayIdx)
                                 ? (theme === 'Midnight'
-                                   ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30'
-                                   : 'bg-white border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/30')
-                                : 'hover:brightness-95 hover:shadow-md cursor-grab active:cursor-grabbing'
+                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
+                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
+                                : !taskId
+                                  ? (theme === 'Midnight'
+                                     ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30'
+                                     : 'bg-white border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/30')
+                                  : 'hover:brightness-95 hover:shadow-md cursor-grab active:cursor-grabbing'
                             }`}
                           >
                             {taskId ? (
                               <span className="text-xs font-bold text-center leading-tight line-clamp-2">{getTaskName(taskId)}</span>
                             ) : (
                               <Plus className={`w-4 h-4 ${theme === 'Midnight' ? 'text-slate-700' : 'text-gray-300'}`} />
+                            )}
+                            {/* Pinned indicator */}
+                            {assignment?.pinned && (
+                              <div className={`absolute bottom-1 right-1 w-4 h-4 rounded-full flex items-center justify-center ${theme === 'Midnight' ? 'bg-indigo-500/30 text-indigo-300' : 'bg-blue-100 text-blue-600'}`}>
+                                <Lock className="w-2.5 h-2.5" />
+                              </div>
                             )}
                           </button>
                         )}
@@ -2200,13 +2910,16 @@ function App() {
 
               {/* Flex Separator - Always show to allow adding flex operators */}
               <tr>
-                 <td colSpan={6} className={`py-3 px-4 sticky left-0 z-10 backdrop-blur-sm border-t border-b ${theme === 'Midnight' ? 'bg-slate-900/80 border-slate-800' : theme === 'Minimal' ? 'bg-[#fffefb]/80 border-stone-100' : 'bg-gray-50/80 border-gray-100'}`}>
-                    <div className="flex items-center gap-2">
-                       <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded ${theme === 'Midnight' ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-100 text-purple-600'}`}>Flex Operators</span>
-                       <span className={`text-xs ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
-                         ({operators.filter(op => op.type === 'Flex').length})
-                       </span>
-                       <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
+                 <td colSpan={6} className={`py-4 px-4 sticky left-0 z-10 ${theme === 'Midnight' ? 'bg-slate-800/50 border-y border-slate-700' : 'bg-gray-100/70 border-y border-gray-200'}`}>
+                    <div className="flex items-center gap-3">
+                       <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${theme === 'Midnight' ? 'bg-purple-900/40 border border-purple-800/50' : 'bg-purple-100 border border-purple-200'}`}>
+                         <div className={`w-2 h-2 rounded-full ${theme === 'Midnight' ? 'bg-purple-400' : 'bg-purple-500'}`}></div>
+                         <span className={`text-xs font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-purple-300' : 'text-purple-700'}`}>Flex Operators</span>
+                         <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600'}`}>
+                           {operators.filter(op => op.type === 'Flex').length}
+                         </span>
+                       </div>
+                       <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-gradient-to-r from-purple-800/50 to-transparent' : 'bg-gradient-to-r from-purple-300 to-transparent'}`}></div>
                        {!currentWeek.locked && (
                          <button
                            onClick={handleAddFlexOperator}
@@ -2365,14 +3078,18 @@ function App() {
                               e.dataTransfer.effectAllowed = 'move';
                             }}
                             onDragEnd={() => setDragInfo(null)}
-                            onClick={() => !currentWeek.locked && setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
+                            onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             disabled={currentWeek.locked}
                             className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
-                              task
-                                ? 'border-transparent cursor-grab active:cursor-grabbing'
-                                : theme === 'Midnight'
-                                ? 'border-slate-800 hover:border-slate-700 text-slate-600'
-                                : 'border-gray-200 hover:border-gray-300 text-gray-400'
+                              isCellSelected(op.id, dayIdx)
+                                ? (theme === 'Midnight'
+                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
+                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
+                                : task
+                                  ? 'border-transparent cursor-grab active:cursor-grabbing'
+                                  : theme === 'Midnight'
+                                  ? 'border-slate-800 hover:border-slate-700 text-slate-600'
+                                  : 'border-gray-200 hover:border-gray-300 text-gray-400'
                             } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
@@ -2409,10 +3126,16 @@ function App() {
 
               {/* Coordinator Separator */}
               <tr>
-                 <td colSpan={6} className={`py-3 px-4 sticky left-0 z-10 backdrop-blur-sm border-t border-b ${theme === 'Midnight' ? 'bg-slate-900/80 border-slate-800' : theme === 'Minimal' ? 'bg-[#fffefb]/80 border-stone-100' : 'bg-gray-50/80 border-gray-100'}`}>
-                    <div className="flex items-center gap-2">
-                       <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded ${theme === 'Midnight' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-emerald-100 text-emerald-600'}`}>Coordinators</span>
-                       <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-slate-200'}`}></div>
+                 <td colSpan={6} className={`py-4 px-4 sticky left-0 z-10 ${theme === 'Midnight' ? 'bg-slate-800/50 border-y border-slate-700' : 'bg-gray-100/70 border-y border-gray-200'}`}>
+                    <div className="flex items-center gap-3">
+                       <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${theme === 'Midnight' ? 'bg-emerald-900/40 border border-emerald-800/50' : 'bg-emerald-100 border border-emerald-200'}`}>
+                         <div className={`w-2 h-2 rounded-full ${theme === 'Midnight' ? 'bg-emerald-400' : 'bg-emerald-500'}`}></div>
+                         <span className={`text-xs font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-emerald-300' : 'text-emerald-700'}`}>Team Coordinators</span>
+                         <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                           {operators.filter(op => op.type === 'Coordinator').length}
+                         </span>
+                       </div>
+                       <div className={`h-px flex-1 ${theme === 'Midnight' ? 'bg-gradient-to-r from-emerald-800/50 to-transparent' : 'bg-gradient-to-r from-emerald-300 to-transparent'}`}></div>
                     </div>
                  </td>
               </tr>
@@ -2506,14 +3229,18 @@ function App() {
                               e.dataTransfer.effectAllowed = 'move';
                             }}
                             onDragEnd={() => setDragInfo(null)}
-                            onClick={() => !currentWeek.locked && setSelectedCell({ opId: op.id, dayIndex: dayIdx })}
+                            onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             disabled={currentWeek.locked}
                             className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
-                              task
-                                ? 'border-transparent cursor-grab active:cursor-grabbing'
-                                : theme === 'Midnight'
-                                ? 'border-slate-800 hover:border-emerald-700 text-slate-600'
-                                : 'border-gray-200 hover:border-emerald-300 text-gray-400'
+                              isCellSelected(op.id, dayIdx)
+                                ? (theme === 'Midnight'
+                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
+                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
+                                : task
+                                  ? 'border-transparent cursor-grab active:cursor-grabbing'
+                                  : theme === 'Midnight'
+                                  ? 'border-slate-800 hover:border-emerald-700 text-slate-600'
+                                  : 'border-gray-200 hover:border-emerald-300 text-gray-400'
                             } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
@@ -2535,19 +3262,262 @@ function App() {
                 </tr>
               ))}
             </tbody>
+            <tfoot className={`sticky bottom-0 z-30 ${theme === 'Midnight' ? 'bg-slate-900/95 backdrop-blur-sm' : 'bg-gray-50/95 backdrop-blur-sm'}`}>
+              <tr className={`border-t-2 ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                <td className={`p-3 sticky left-0 z-40 ${theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-gray-50/95'}`}>
+                  <div className="flex items-center gap-2">
+                    <Activity className={`h-4 w-4 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-500'}`} />
+                    <span className={`text-xs font-bold uppercase tracking-wide ${theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'}`}>Coverage</span>
+                  </div>
+                </td>
+                {currentWeek.days.map((day, dayIdx) => {
+                  // Calculate daily coverage
+                  const availableOps = operators.filter(o => o.status === 'Active' && o.type !== 'Coordinator');
+                  const totalSlotsDay = availableOps.length;
+                  const filledSlotsDay = Object.values(day.assignments).filter(a => (a as ScheduleAssignment).taskId !== null).length;
+                  const coverageDay = totalSlotsDay > 0 ? Math.round((filledSlotsDay / totalSlotsDay) * 100) : 0;
+
+                  return (
+                    <td key={dayIdx} className="p-2 text-center">
+                      <div className="flex flex-col items-center gap-1">
+                        <div className={`text-lg font-bold ${
+                          coverageDay >= 90
+                            ? 'text-emerald-500'
+                            : coverageDay >= 70
+                            ? theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                            : 'text-red-500'
+                        }`}>
+                          {coverageDay}%
+                        </div>
+                        <div className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                          {filledSlotsDay}/{totalSlotsDay}
+                        </div>
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
+
+      {/* Bulk Assign Floating Action Bar */}
+      {selectedCells.size > 0 && (
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border ${
+          theme === 'Midnight'
+            ? 'bg-slate-800/95 backdrop-blur-sm border-slate-600'
+            : 'bg-white/95 backdrop-blur-sm border-gray-200'
+        }`}>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
+            theme === 'Midnight' ? 'bg-indigo-600/20' : 'bg-indigo-50'
+          }`}>
+            <Check className="w-4 h-4 text-indigo-500" />
+            <span className={`text-sm font-medium ${
+              theme === 'Midnight' ? 'text-indigo-300' : 'text-indigo-700'
+            }`}>
+              {selectedCells.size} cell{selectedCells.size > 1 ? 's' : ''} selected
+            </span>
+          </div>
+
+          <div className="h-6 w-px bg-gray-300" />
+
+          {/* Task Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setShowBulkAssignMenu(!showBulkAssignMenu)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                theme === 'Midnight'
+                  ? 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              <Zap className="w-4 h-4" />
+              Assign Task
+              <ChevronDown className={`w-4 h-4 transition-transform ${showBulkAssignMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Task Dropdown */}
+            {showBulkAssignMenu && (
+              <div className={`absolute bottom-full mb-2 left-0 w-64 max-h-80 overflow-auto rounded-lg shadow-xl border ${
+                theme === 'Midnight'
+                  ? 'bg-slate-800 border-slate-600'
+                  : 'bg-white border-gray-200'
+              }`}>
+                {/* Off option */}
+                <button
+                  onClick={() => handleBulkAssign(null)}
+                  className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${
+                    theme === 'Midnight'
+                      ? 'hover:bg-slate-700 text-slate-300'
+                      : 'hover:bg-gray-100 text-gray-600'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded ${theme === 'Midnight' ? 'bg-slate-600' : 'bg-gray-300'}`} />
+                  Off / Unassigned
+                </button>
+
+                <div className={`h-px ${theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-100'}`} />
+
+                {/* Filter tasks based on selected operators' skills */}
+                {(() => {
+                  // Get unique operator IDs from selection
+                  const selectedOpIds = new Set<string>();
+                  selectedCells.forEach(cellKey => {
+                    const [opId] = cellKey.split('-');
+                    selectedOpIds.add(opId);
+                  });
+
+                  // Find common skills among selected operators
+                  const selectedOps = operators.filter(op => selectedOpIds.has(op.id));
+                  const commonSkills = selectedOps.length > 0
+                    ? selectedOps[0].skills.filter(skill =>
+                        selectedOps.every(op => op.skills.includes(skill))
+                      )
+                    : [];
+
+                  // Filter tasks to those matching common skills
+                  const availableTasks = tasks.filter(task =>
+                    commonSkills.includes(task.requiredSkill)
+                  );
+
+                  if (availableTasks.length === 0) {
+                    return (
+                      <div className={`px-3 py-4 text-sm text-center ${
+                        theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'
+                      }`}>
+                        No common skills among selected operators
+                      </div>
+                    );
+                  }
+
+                  return availableTasks.map(task => (
+                    <button
+                      key={task.id}
+                      onClick={() => handleBulkAssign(task.id)}
+                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${
+                        theme === 'Midnight'
+                          ? 'hover:bg-slate-700'
+                          : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      <div
+                        className="w-4 h-4 rounded"
+                        style={{ backgroundColor: task.color }}
+                      />
+                      <span className={theme === 'Midnight' ? 'text-slate-200' : 'text-gray-700'}>
+                        {task.name}
+                      </span>
+                    </button>
+                  ));
+                })()}
+              </div>
+            )}
+          </div>
+
+          {/* Clear Selection */}
+          <button
+            onClick={() => {
+              setSelectedCells(new Set());
+              setSelectionAnchor(null);
+              setShowBulkAssignMenu(false);
+            }}
+            className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              theme === 'Midnight'
+                ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <X className="w-4 h-4" />
+            Clear
+          </button>
+
+          {/* Keyboard hint */}
+          <div className={`text-xs ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+            <kbd className={`px-1.5 py-0.5 rounded ${
+              theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-200'
+            }`}>Esc</kbd> to cancel
+          </div>
+        </div>
+      )}
     </div>
   );
 
+  // --- Loading Screen ---
+  if (loadingState === 'loading') {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative">
+            <Database className="w-12 h-12 text-blue-600 animate-pulse" />
+            <Loader2 className="w-6 h-6 text-blue-600 animate-spin absolute -bottom-1 -right-1" />
+          </div>
+          <div className="text-center">
+            <h2 className="text-lg font-semibold text-slate-800">Loading Lord of the Bins</h2>
+            <p className="text-sm text-slate-500 mt-1">Initializing storage...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Error Screen ---
+  if (loadingState === 'error' && storageError) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg border border-red-200">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-red-100 rounded-lg">
+              <AlertCircle className="w-6 h-6 text-red-600" />
+            </div>
+            <h2 className="text-lg font-semibold text-slate-800">Storage Error</h2>
+          </div>
+          <p className="text-slate-600 mb-4">{storageError.message}</p>
+          {storageError.code === 'NOT_SUPPORTED' && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
+              <p className="text-sm text-amber-800">
+                <strong>Tip:</strong> IndexedDB is not supported in private/incognito mode in some browsers.
+                Try opening this page in a regular browser window.
+              </p>
+            </div>
+          )}
+          {storageError.code === 'QUOTA_EXCEEDED' && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
+              <p className="text-sm text-amber-800">
+                <strong>Tip:</strong> Your browser storage is full. Try clearing some site data in your browser settings.
+              </p>
+            </div>
+          )}
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full py-2 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main App (only rendered when data is ready) ---
+  if (!dataInitialized) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+          <p className="text-sm text-slate-500">Preparing your data...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex h-screen w-full font-sans selection:bg-blue-100 transition-colors duration-300 ${styles.bg}`}>
-      
+
       {styles.layout === 'sidebar' && (
-        <Sidebar 
-          activeTab={activeTab} 
-          setActiveTab={setActiveTab} 
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
           isOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}
@@ -2642,6 +3612,64 @@ function App() {
         operators={operators}
         tasks={tasks}
       />
+
+      {/* Clear Data Confirmation Modal */}
+      {showClearDataModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-md rounded-2xl p-6 shadow-2xl ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className={`p-3 rounded-full ${theme === 'Midnight' ? 'bg-red-500/10' : 'bg-red-100'}`}>
+                <AlertTriangle className={`h-6 w-6 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-600'}`} />
+              </div>
+              <div>
+                <h3 className={`text-lg font-bold ${theme === 'Midnight' ? 'text-red-400' : 'text-red-700'}`}>
+                  Delete All Data?
+                </h3>
+                <p className={`text-sm ${theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'}`}>
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <div className={`p-4 rounded-xl mb-4 ${theme === 'Midnight' ? 'bg-red-950/30 border border-red-900/50' : 'bg-red-50 border border-red-200'}`}>
+              <p className={`text-sm ${theme === 'Midnight' ? 'text-red-400/90' : 'text-red-700'}`}>
+                You are about to permanently delete:
+              </p>
+              <ul className={`text-sm mt-2 space-y-1 ${theme === 'Midnight' ? 'text-red-400/80' : 'text-red-600'}`}>
+                <li>• {operators.length} operators</li>
+                <li>• {tasks.length} tasks</li>
+                <li>• {Object.keys(scheduleHistory).length + 1} schedules</li>
+                <li>• All settings and preferences</li>
+              </ul>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowClearDataModal(false)}
+                className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    await clearAllData();
+                    addToast('success', 'All data cleared. Reloading...');
+                    setShowClearDataModal(false);
+                    setTimeout(() => window.location.reload(), 1500);
+                  } catch (err) {
+                    addToast('error', 'Failed to clear data');
+                  }
+                }}
+                className="flex-1 py-3 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
+              >
+                <Trash2 className="inline-block h-4 w-4 mr-2" />
+                Delete Everything
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Command Palette */}
       <CommandPalette

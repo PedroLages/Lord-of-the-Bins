@@ -177,8 +177,39 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
              {/* Availability */}
              <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
-                   <CalendarDays className="h-3 w-3" /> Availability
+                   <CalendarDays className="h-3 w-3" /> Availability Pattern
                 </label>
+
+                {/* Quick Pattern Presets */}
+                <div className="flex flex-wrap gap-2 mb-3">
+                   {[
+                     { label: 'Full Week', pattern: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+                     { label: 'Early Week', pattern: { Mon: true, Tue: true, Wed: true, Thu: false, Fri: false } },
+                     { label: 'Late Week', pattern: { Mon: false, Tue: false, Wed: true, Thu: true, Fri: true } },
+                     { label: '4 Days', pattern: { Mon: true, Tue: true, Wed: false, Thu: true, Fri: true } },
+                     { label: 'None', pattern: { Mon: false, Tue: false, Wed: false, Thu: false, Fri: false } },
+                   ].map((preset) => {
+                      const isActive = Object.keys(preset.pattern).every(
+                        day => availability[day as WeekDay] === preset.pattern[day as WeekDay]
+                      );
+                      return (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setAvailability(preset.pattern)}
+                          className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide rounded-full border transition-all ${
+                            isActive
+                              ? 'bg-blue-600 border-blue-600 text-white'
+                              : 'bg-white border-gray-200 text-gray-500 hover:border-blue-300 hover:text-blue-600'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                   })}
+                </div>
+
+                {/* Day-by-day Toggle */}
                 <div className="grid grid-cols-5 gap-2">
                    {(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as WeekDay[]).map(day => (
                       <button
@@ -197,7 +228,7 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
                    ))}
                 </div>
                 <p className="text-[10px] text-gray-400 mt-2">
-                   Uncheck days when this operator typically cannot work.
+                   Set the recurring weekly availability pattern for this operator.
                 </p>
              </div>
           </div>

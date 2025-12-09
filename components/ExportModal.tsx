@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2, Palette } from 'lucide-react';
+import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2, Palette, FileSpreadsheet, Table2 } from 'lucide-react';
 import { WeeklySchedule, Operator, TaskType } from '../types';
 import {
   exportToPng,
@@ -8,7 +8,9 @@ import {
   shareToWhatsApp,
   downloadFile,
   generateFilename,
-  ExportTheme
+  ExportTheme,
+  exportToCsv,
+  exportToExcel
 } from '../services/exportService';
 import { getWeekLabel, getWeekRangeString } from '../services/weekUtils';
 
@@ -22,7 +24,7 @@ interface ExportModalProps {
   tasks: TaskType[];
 }
 
-type ExportFormat = 'png' | 'pdf' | 'whatsapp';
+type ExportFormat = 'png' | 'pdf' | 'whatsapp' | 'csv' | 'excel';
 
 const ExportModal: React.FC<ExportModalProps> = ({
   isOpen,
@@ -108,6 +110,17 @@ const ExportModal: React.FC<ExportModalProps> = ({
           await shareToWhatsApp(scheduleRef.current, week);
           break;
         }
+        case 'csv': {
+          const csvContent = exportToCsv(week, operators, tasks);
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          downloadFile(blob, generateFilename(week, 'csv'));
+          break;
+        }
+        case 'excel': {
+          const excelBlob = exportToExcel(week, operators, tasks);
+          downloadFile(excelBlob, generateFilename(week, 'xls'));
+          break;
+        }
       }
       setExportSuccess(format);
     } catch (err) {
@@ -136,6 +149,24 @@ const ExportModal: React.FC<ExportModalProps> = ({
       color: 'text-red-500',
       bgColor: isDark ? 'bg-red-500/10' : 'bg-red-50',
       borderColor: isDark ? 'border-red-500/30' : 'border-red-200'
+    },
+    {
+      id: 'excel' as ExportFormat,
+      icon: FileSpreadsheet,
+      title: 'Excel Spreadsheet',
+      description: 'Editable spreadsheet (.xls)',
+      color: 'text-emerald-500',
+      bgColor: isDark ? 'bg-emerald-500/10' : 'bg-emerald-50',
+      borderColor: isDark ? 'border-emerald-500/30' : 'border-emerald-200'
+    },
+    {
+      id: 'csv' as ExportFormat,
+      icon: Table2,
+      title: 'CSV File',
+      description: 'Plain text data format',
+      color: 'text-amber-500',
+      bgColor: isDark ? 'bg-amber-500/10' : 'bg-amber-50',
+      borderColor: isDark ? 'border-amber-500/30' : 'border-amber-200'
     },
     {
       id: 'whatsapp' as ExportFormat,

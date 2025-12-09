@@ -1,9 +1,10 @@
 import { toPng, toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import { WeeklySchedule, Operator, TaskType, MOCK_TASKS } from '../types';
+import { WeeklySchedule, Operator, TaskType, MOCK_TASKS, WeekDay } from '../types';
 import { getWeekLabel, getWeekRangeString } from './weekUtils';
 
 export type ExportTheme = 'modern' | 'classic';
+export type ExportFormat = 'png' | 'pdf' | 'whatsapp' | 'csv' | 'excel';
 
 export interface ExportOptions {
   format: 'png' | 'pdf' | 'whatsapp';
@@ -307,7 +308,7 @@ export async function exportToPdf(
   // Calculate image dimensions to fit page
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 14;
+  const margin = 8; // Reduced margin for wider schedule
   const headerSpace = 35;
 
   const maxWidth = pageWidth - (margin * 2);
@@ -650,6 +651,155 @@ export async function shareToWhatsApp(
     : `https://web.whatsapp.com/send?text=${message}`;
 
   window.open(whatsappUrl, '_blank');
+}
+
+/**
+ * Export the schedule as a CSV file
+ */
+export function exportToCsv(
+  week: WeeklySchedule,
+  operators: Operator[],
+  tasks: TaskType[]
+): string {
+  const dayHeaders = ['Operator', 'Type', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  const rows: string[][] = [dayHeaders];
+
+  // Sort operators by type: Regular, Flex, Coordinator
+  const sortedOperators = [
+    ...operators.filter(op => op.type === 'Regular' && op.status === 'Active'),
+    ...operators.filter(op => op.type === 'Flex' && op.status === 'Active'),
+    ...operators.filter(op => op.type === 'Coordinator' && op.status === 'Active'),
+  ];
+
+  sortedOperators.forEach(op => {
+    const row: string[] = [op.name, op.type];
+
+    week.days.forEach(day => {
+      const assignment = day.assignments[op.id];
+      const taskId = assignment?.taskId;
+      const task = taskId ? tasks.find(t => t.id === taskId) : null;
+      row.push(task?.name || '');
+    });
+
+    rows.push(row);
+  });
+
+  // Convert to CSV string with proper escaping
+  return rows.map(row =>
+    row.map(cell => {
+      // Escape cells that contain commas, quotes, or newlines
+      if (cell.includes(',') || cell.includes('"') || cell.includes('\n')) {
+        return `"${cell.replace(/"/g, '""')}"`;
+      }
+      return cell;
+    }).join(',')
+  ).join('\n');
+}
+
+/**
+ * Export the schedule as an Excel-compatible file (XLSX)
+ * Uses a simple XML-based format that Excel can open
+ */
+export function exportToExcel(
+  week: WeeklySchedule,
+  operators: Operator[],
+  tasks: TaskType[]
+): Blob {
+  // Sort operators by type
+  const sortedOperators = [
+    ...operators.filter(op => op.type === 'Regular' && op.status === 'Active'),
+    ...operators.filter(op => op.type === 'Flex' && op.status === 'Active'),
+    ...operators.filter(op => op.type === 'Coordinator' && op.status === 'Active'),
+  ];
+
+  // Build Excel XML (SpreadsheetML format)
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Size="12"/>
+   <Interior ss:Color="#228B22" ss:Pattern="Solid"/>
+   <Font ss:Color="#FFFFFF"/>
+  </Style>
+  <Style ss:ID="SubHeader">
+   <Font ss:Bold="1" ss:Size="10"/>
+   <Interior ss:Color="#F0F0F0" ss:Pattern="Solid"/>
+  </Style>
+  <Style ss:ID="DayMon"><Interior ss:Color="#FFC0CB" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="DayTue"><Interior ss:Color="#FFFF99" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="DayWed"><Interior ss:Color="#ADD8E6" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="DayThu"><Interior ss:Color="#90EE90" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="DayFri"><Interior ss:Color="#DDA0DD" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="OperatorName"><Interior ss:Color="#E0E0E0" ss:Pattern="Solid"/><Font ss:Bold="1"/></Style>
+  <Style ss:ID="Regular"><Font ss:Color="#3B82F6"/></Style>
+  <Style ss:ID="Flex"><Font ss:Color="#A855F7"/></Style>
+  <Style ss:ID="Coordinator"><Font ss:Color="#10B981"/></Style>
+ </Styles>
+ <Worksheet ss:Name="Schedule Week ${week.weekNumber}">
+  <Table>
+   <Column ss:Width="100"/>
+   <Column ss:Width="80"/>
+   <Column ss:Width="120"/>
+   <Column ss:Width="120"/>
+   <Column ss:Width="120"/>
+   <Column ss:Width="120"/>
+   <Column ss:Width="120"/>
+   <Row ss:Height="30">
+    <Cell ss:MergeAcross="6" ss:StyleID="Header"><Data ss:Type="String">OPERATIONAL PLAN 4M - Week ${week.weekNumber}, ${week.year}</Data></Cell>
+   </Row>
+   <Row ss:Height="25">
+    <Cell ss:MergeAcross="6" ss:StyleID="SubHeader"><Data ss:Type="String">Weekly Planning - ${getWeekRangeString(new Date(week.days[0].date))}</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:StyleID="SubHeader"><Data ss:Type="String">Operator</Data></Cell>
+    <Cell ss:StyleID="SubHeader"><Data ss:Type="String">Type</Data></Cell>
+    <Cell ss:StyleID="DayMon"><Data ss:Type="String">Mon ${week.days[0].date.slice(5)}</Data></Cell>
+    <Cell ss:StyleID="DayTue"><Data ss:Type="String">Tue ${week.days[1].date.slice(5)}</Data></Cell>
+    <Cell ss:StyleID="DayWed"><Data ss:Type="String">Wed ${week.days[2].date.slice(5)}</Data></Cell>
+    <Cell ss:StyleID="DayThu"><Data ss:Type="String">Thu ${week.days[3].date.slice(5)}</Data></Cell>
+    <Cell ss:StyleID="DayFri"><Data ss:Type="String">Fri ${week.days[4].date.slice(5)}</Data></Cell>
+   </Row>`;
+
+  // Add operator rows
+  sortedOperators.forEach(op => {
+    const typeStyle = op.type === 'Regular' ? 'Regular' : op.type === 'Flex' ? 'Flex' : 'Coordinator';
+    xml += `
+   <Row>
+    <Cell ss:StyleID="OperatorName"><Data ss:Type="String">${escapeXml(op.name)}</Data></Cell>
+    <Cell ss:StyleID="${typeStyle}"><Data ss:Type="String">${op.type}</Data></Cell>`;
+
+    week.days.forEach(day => {
+      const assignment = day.assignments[op.id];
+      const taskId = assignment?.taskId;
+      const task = taskId ? tasks.find(t => t.id === taskId) : null;
+      xml += `
+    <Cell><Data ss:Type="String">${task ? escapeXml(task.name) : ''}</Data></Cell>`;
+    });
+
+    xml += `
+   </Row>`;
+  });
+
+  xml += `
+  </Table>
+ </Worksheet>
+</Workbook>`;
+
+  return new Blob([xml], { type: 'application/vnd.ms-excel' });
+}
+
+/**
+ * Escape special XML characters
+ */
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /**
