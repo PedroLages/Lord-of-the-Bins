@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Operator, TaskType, WeeklySchedule } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import type { SchedulingRules } from '../schedulingService';
 
@@ -24,6 +24,7 @@ export class LotBDatabase extends Dexie {
   schedules!: Table<WeeklySchedule, string>;
   settings!: Table<AppSettings, string>;
   activityLog!: Table<ActivityLogEntry, string>;
+  taskRequirements!: Table<TaskRequirement, string>;
 
   constructor() {
     super('LordOfTheBinsDB');
@@ -37,6 +38,16 @@ export class LotBDatabase extends Dexie {
       schedules: 'id, [year+weekNumber], status', // Compound index for week lookup
       settings: 'id',
       activityLog: 'id, type, timestamp',
+    });
+
+    // Version 2 - Add task requirements table
+    this.version(2).stores({
+      operators: 'id, name, type, status, archived',
+      tasks: 'id, name, requiredSkill',
+      schedules: 'id, [year+weekNumber], status',
+      settings: 'id',
+      activityLog: 'id, type, timestamp',
+      taskRequirements: 'taskId', // Primary key is taskId (one requirement per task)
     });
   }
 }

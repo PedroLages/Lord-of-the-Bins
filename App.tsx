@@ -11,11 +11,12 @@ import {
   Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X
 } from 'lucide-react';
 import {
-  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay
+  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement
 } from './types';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import CommandPalette from './components/CommandPalette';
+import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { generateSmartSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
@@ -82,6 +83,8 @@ function App() {
     saveTask,
     saveSchedule,
     saveSettings,
+    saveTaskRequirement,
+    deleteTaskRequirement,
     exportData,
   } = useStorage();
 
@@ -115,6 +118,7 @@ function App() {
       setScheduleHistory(initialData.schedules);
       setTheme(initialData.theme);
       setSchedulingRules(initialData.schedulingRules);
+      setTaskRequirements(initialData.taskRequirements || []);
 
       // Try to load current week from schedule history
       const now = new Date();
@@ -182,7 +186,10 @@ function App() {
   }, []);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'tasks' | 'automation' | 'integrations' | 'data'>('tasks');
+  const [settingsTab, setSettingsTab] = useState<'tasks' | 'requirements' | 'automation' | 'integrations' | 'data'>('tasks');
+
+  // Task requirements state
+  const [taskRequirements, setTaskRequirements] = useState<TaskRequirement[]>([]);
 
   // Data Management State
   const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null);
@@ -368,6 +375,29 @@ function App() {
         ? { ...t, requiredOperators: Math.max(1, Math.min(5, count)) }
         : t
     ));
+  };
+
+  // Task Requirements Handlers
+  const handleSaveTaskRequirement = async (requirement: TaskRequirement) => {
+    // Update local state
+    setTaskRequirements(prev => {
+      const existing = prev.findIndex(r => r.taskId === requirement.taskId);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = requirement;
+        return updated;
+      }
+      return [...prev, requirement];
+    });
+    // Persist to storage
+    await saveTaskRequirement(requirement);
+    toast.success('Requirement saved', `Staffing requirement updated for task`);
+  };
+
+  const handleDeleteTaskRequirement = async (taskId: string) => {
+    setTaskRequirements(prev => prev.filter(r => r.taskId !== taskId));
+    await deleteTaskRequirement(taskId);
+    toast.info('Requirement reset', 'Using default task requirement');
   };
 
   // Flex Operator Management Functions
@@ -787,7 +817,8 @@ function App() {
         tasks,
         days: daysList,
         currentAssignments: currentAssignmentsMap,
-        rules: schedulingRules
+        rules: schedulingRules,
+        taskRequirements
       });
 
       if (result && result.assignments) {
@@ -2089,6 +2120,7 @@ function App() {
         <div className={`w-full lg:w-64 shrink-0 rounded-2xl p-2 border flex flex-col gap-1 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200 shadow-sm'}`}>
            {[
              { id: 'tasks', label: 'Task Definitions', icon: Sliders },
+             { id: 'requirements', label: 'Staffing Requirements', icon: Users },
              { id: 'automation', label: 'Scheduling Rules', icon: Sliders },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
              { id: 'data', label: 'Data Management', icon: Database },
@@ -2194,7 +2226,17 @@ function App() {
                  </div>
               </div>
            )}
-           
+
+           {settingsTab === 'requirements' && (
+              <TaskRequirementsSettings
+                tasks={tasks}
+                requirements={taskRequirements}
+                onSaveRequirement={handleSaveTaskRequirement}
+                onDeleteRequirement={handleDeleteTaskRequirement}
+                theme={theme}
+              />
+           )}
+
            {settingsTab === 'automation' && (
              <div className="max-w-2xl">
                 <div className="mb-8 border-b pb-6 border-gray-100/10">

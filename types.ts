@@ -1,5 +1,42 @@
 export type WeekDay = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri';
 
+// Operator types that can be specified in requirements
+export type OperatorTypeOption = 'Regular' | 'Flex' | 'Coordinator' | 'Any';
+
+// Single requirement entry: how many of a specific operator type
+export interface OperatorTypeRequirement {
+  type: OperatorTypeOption;
+  count: number;
+}
+
+// Task staffing requirements configuration
+export interface TaskRequirement {
+  taskId: string;
+  // Default requirements (applies to all days unless overridden)
+  // e.g., [{type: 'Flex', count: 2}, {type: 'Regular', count: 1}] means 2 Flex + 1 Regular
+  defaultRequirements: OperatorTypeRequirement[];
+  // Optional per-day overrides (only specified days are overridden)
+  dailyOverrides?: Partial<Record<WeekDay, OperatorTypeRequirement[]>>;
+  // Whether this requirement is enabled (allows temporarily disabling)
+  enabled?: boolean;
+}
+
+// Helper to get total required operators from requirements array
+export function getTotalFromRequirements(requirements: OperatorTypeRequirement[]): number {
+  return requirements.reduce((sum, req) => sum + req.count, 0);
+}
+
+// Helper to get requirements for a specific day
+export function getRequirementsForDay(
+  taskReq: TaskRequirement,
+  day: WeekDay
+): OperatorTypeRequirement[] {
+  if (taskReq.dailyOverrides?.[day]) {
+    return taskReq.dailyOverrides[day]!;
+  }
+  return taskReq.defaultRequirements;
+}
+
 export interface TaskType {
   id: string;
   name: string;

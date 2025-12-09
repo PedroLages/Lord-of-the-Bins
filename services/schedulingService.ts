@@ -1,4 +1,4 @@
-import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay } from '../types';
+import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement } from '../types';
 
 // Configuration for the scheduling algorithm
 export interface SchedulingRules {
@@ -40,6 +40,7 @@ interface ScheduleRequestData {
   days: WeekDay[];
   currentAssignments?: Record<string, Record<string, ScheduleAssignment>>; // dayIndex -> operatorId -> assignment
   rules?: SchedulingRules;
+  taskRequirements?: TaskRequirement[]; // Optional type-based requirements per task
 }
 
 interface ScheduleResult {
@@ -70,7 +71,7 @@ interface OperatorScore {
  * Generate a smart schedule using constraint-based algorithm
  */
 export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult {
-  const { operators, tasks, days, currentAssignments = {}, rules = DEFAULT_RULES } = data;
+  const { operators, tasks, days, currentAssignments = {}, rules = DEFAULT_RULES, taskRequirements = [] } = data;
 
   const assignments: ScheduleResult['assignments'] = [];
   const warnings: ScheduleWarning[] = [];
@@ -211,6 +212,37 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       return assigned < required;
     });
 
+    // Track operator types assigned to each task for type requirements
+    const taskTypeAssignments: Record<string, Record<string, number>> = {};
+    tasks.forEach(t => {
+      taskTypeAssignments[t.id] = { Regular: 0, Flex: 0, Coordinator: 0 };
+    });
+
+    // Count types already assigned via locked/pinned
+    Object.entries(dayAssignments).forEach(([opId, assignment]) => {
+      if ((assignment.locked || assignment.pinned) && assignment.taskId) {
+        const op = operators.find(o => o.id === opId);
+        if (op) {
+          taskTypeAssignments[assignment.taskId][op.type] =
+            (taskTypeAssignments[assignment.taskId][op.type] || 0) + 1;
+        }
+      }
+    });
+
+    // Also count TC assignments
+    tcAssignedByDay[day].forEach(tcId => {
+      const tcTaskId = operatorDailyAssignments[tcId]?.[day];
+      if (tcTaskId) {
+        taskTypeAssignments[tcTaskId]['Coordinator'] =
+          (taskTypeAssignments[tcTaskId]['Coordinator'] || 0) + 1;
+      }
+    });
+
+    // Helper to get requirement for a task
+    const getTaskRequirement = (taskId: string): TaskRequirement | undefined => {
+      return taskRequirements.find(r => r.taskId === taskId && r.enabled !== false);
+    };
+
     // Score each operator-task combination
     const scores: OperatorScore[] = [];
 
@@ -226,9 +258,11 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
             operatorHeavyTaskCount,
             operatorLastTask,
             operatorDailyAssignments,
+            taskTypeAssignments,
           },
           rules,
-          tasks
+          tasks,
+          getTaskRequirement(task.id)
         );
 
         if (score.score > 0) {
@@ -263,6 +297,8 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       // Skip if task has reached its required operators
       if (currentlyAssigned >= required) return;
 
+      const assignedOp = operators.find(o => o.id === score.operatorId);
+
       assignments.push({
         day,
         operatorId: score.operatorId,
@@ -273,6 +309,12 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       taskAssignmentsThisRound[score.taskId] = currentlyAssigned + 1;
       operatorTaskCount[score.operatorId]++;
       operatorDailyAssignments[score.operatorId][day] = score.taskId;
+
+      // Update type tracking for this task
+      if (assignedOp) {
+        taskTypeAssignments[score.taskId][assignedOp.type] =
+          (taskTypeAssignments[score.taskId][assignedOp.type] || 0) + 1;
+      }
 
       if (HEAVY_TASKS.includes(task.name)) {
         operatorHeavyTaskCount[score.operatorId]++;
@@ -311,9 +353,11 @@ function calculateAssignmentScore(
     operatorHeavyTaskCount: Record<string, number>;
     operatorLastTask: Record<string, { taskId: string; consecutiveDays: number }>;
     operatorDailyAssignments: Record<string, Record<string, string>>;
+    taskTypeAssignments: Record<string, Record<string, number>>;
   },
   rules: SchedulingRules,
-  allTasks: TaskType[]
+  allTasks: TaskType[],
+  taskRequirement?: TaskRequirement
 ): OperatorScore {
   let score = 100; // Base score
   const reasons: string[] = [];
@@ -407,6 +451,50 @@ function calculateAssignmentScore(
     } else if (operatorCount < avgTasks) {
       score += 5;
       reasons.push('Below average workload');
+    }
+  }
+
+  // Type requirement scoring
+  // If the task has specific type requirements, boost operators that match unfilled slots
+  if (taskRequirement) {
+    const requirements = getRequirementsForDay(taskRequirement, day);
+    const currentAssignments = tracking.taskTypeAssignments[task.id] || { Regular: 0, Flex: 0, Coordinator: 0 };
+
+    // Check each requirement type
+    let matchesNeededType = false;
+    let allSlotsFilledForType = false;
+
+    for (const req of requirements) {
+      if (req.count === 0) continue;
+
+      if (req.type === 'Any') {
+        // "Any" type - no specific preference
+        matchesNeededType = true;
+      } else if (req.type === operator.type) {
+        // Operator's type matches this requirement
+        const currentCount = currentAssignments[req.type] || 0;
+        if (currentCount < req.count) {
+          // There's still a slot for this type
+          matchesNeededType = true;
+          score += 25; // Strong boost for matching a specific type slot
+          reasons.push(`Matches required type: ${req.type}`);
+        } else {
+          // This type's slots are filled
+          allSlotsFilledForType = true;
+        }
+      }
+    }
+
+    // If operator's type has all slots filled and there's no "Any" slot open, penalize
+    if (allSlotsFilledForType && !matchesNeededType) {
+      // Check if there's unfilled "Any" slots
+      const totalRequired = getTotalFromRequirements(requirements);
+      const totalAssigned = Object.values(currentAssignments).reduce((sum, count) => sum + count, 0);
+      if (totalAssigned >= totalRequired) {
+        // No room at all
+        score -= 50;
+        reasons.push(`${operator.type} slots already filled`);
+      }
     }
   }
 

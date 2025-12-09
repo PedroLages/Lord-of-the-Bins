@@ -1,4 +1,4 @@
-import type { Operator, TaskType, WeeklySchedule } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import { db, isIndexedDBSupported, type AppSettings } from './database';
 import type { StorageService, ExportData } from './storageService';
@@ -266,17 +266,65 @@ export class IndexedDBStorage implements StorageService {
   }
 
   // ─────────────────────────────────────────────────────────────────
+  // Task Requirements
+  // ─────────────────────────────────────────────────────────────────
+
+  async getAllTaskRequirements(): Promise<TaskRequirement[]> {
+    try {
+      return await db.taskRequirements.toArray();
+    } catch (error) {
+      throw new StorageError(`Failed to read task requirements: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async getTaskRequirement(taskId: string): Promise<TaskRequirement | undefined> {
+    try {
+      return await db.taskRequirements.get(taskId);
+    } catch (error) {
+      throw new StorageError(`Failed to read task requirement: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async saveTaskRequirement(requirement: TaskRequirement): Promise<void> {
+    try {
+      await db.taskRequirements.put(requirement);
+    } catch (error) {
+      this.handleWriteError(error);
+    }
+  }
+
+  async saveAllTaskRequirements(requirements: TaskRequirement[]): Promise<void> {
+    try {
+      await db.transaction('rw', db.taskRequirements, async () => {
+        await db.taskRequirements.clear();
+        await db.taskRequirements.bulkPut(requirements);
+      });
+    } catch (error) {
+      this.handleWriteError(error);
+    }
+  }
+
+  async deleteTaskRequirement(taskId: string): Promise<void> {
+    try {
+      await db.taskRequirements.delete(taskId);
+    } catch (error) {
+      throw new StorageError(`Failed to delete task requirement: ${error}`, 'WRITE_ERROR');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // Bulk Operations
   // ─────────────────────────────────────────────────────────────────
 
   async exportAll(): Promise<ExportData> {
     try {
-      const [operators, tasks, schedules, settings, activityLog] = await Promise.all([
+      const [operators, tasks, schedules, settings, activityLog, taskRequirements] = await Promise.all([
         this.getAllOperators(),
         this.getAllTasks(),
         this.getAllSchedules(),
         this.getSettings(),
         this.getActivityLog(),
+        this.getAllTaskRequirements(),
       ]);
 
       return {
@@ -287,6 +335,7 @@ export class IndexedDBStorage implements StorageService {
         schedules,
         settings: settings || null,
         activityLog,
+        taskRequirements,
       };
     } catch (error) {
       throw new StorageError(`Failed to export data: ${error}`, 'READ_ERROR');
@@ -295,7 +344,7 @@ export class IndexedDBStorage implements StorageService {
 
   async importAll(data: ExportData, overwrite: boolean = true): Promise<void> {
     try {
-      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog], async () => {
+      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements], async () => {
         if (overwrite) {
           await Promise.all([
             db.operators.clear(),
@@ -303,6 +352,7 @@ export class IndexedDBStorage implements StorageService {
             db.schedules.clear(),
             db.settings.clear(),
             db.activityLog.clear(),
+            db.taskRequirements.clear(),
           ]);
         }
 
@@ -312,6 +362,7 @@ export class IndexedDBStorage implements StorageService {
           db.schedules.bulkPut(data.schedules),
           data.settings ? db.settings.put(data.settings) : Promise.resolve(),
           db.activityLog.bulkPut(data.activityLog),
+          data.taskRequirements ? db.taskRequirements.bulkPut(data.taskRequirements) : Promise.resolve(),
         ]);
       });
     } catch (error) {
@@ -321,13 +372,14 @@ export class IndexedDBStorage implements StorageService {
 
   async clearAll(): Promise<void> {
     try {
-      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog], async () => {
+      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements], async () => {
         await Promise.all([
           db.operators.clear(),
           db.tasks.clear(),
           db.schedules.clear(),
           db.settings.clear(),
           db.activityLog.clear(),
+          db.taskRequirements.clear(),
         ]);
       });
     } catch (error) {

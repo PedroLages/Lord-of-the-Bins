@@ -1,4 +1,4 @@
-import type { Operator, TaskType, WeeklySchedule } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import type { AppSettings } from './database';
 
@@ -71,6 +71,16 @@ export interface StorageService {
   clearActivityLog(): Promise<void>;
 
   // ─────────────────────────────────────────────────────────────────
+  // Task Requirements
+  // ─────────────────────────────────────────────────────────────────
+
+  getAllTaskRequirements(): Promise<TaskRequirement[]>;
+  getTaskRequirement(taskId: string): Promise<TaskRequirement | undefined>;
+  saveTaskRequirement(requirement: TaskRequirement): Promise<void>;
+  saveAllTaskRequirements(requirements: TaskRequirement[]): Promise<void>;
+  deleteTaskRequirement(taskId: string): Promise<void>;
+
+  // ─────────────────────────────────────────────────────────────────
   // Bulk Operations
   // ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +113,7 @@ export interface ExportData {
   schedules: WeeklySchedule[];
   settings: AppSettings | null;
   activityLog: ActivityLogEntry[];
+  taskRequirements?: TaskRequirement[]; // Optional for backwards compatibility
 }
 
 /**

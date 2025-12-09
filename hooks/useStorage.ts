@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Operator, TaskType, WeeklySchedule } from '../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../types';
 import type { SchedulingRules } from '../services/schedulingService';
 import { storage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError } from '../services/storage';
 import type { AppSettings } from '../services/storage';
@@ -13,6 +13,7 @@ export interface StorageState {
   schedules: Record<string, WeeklySchedule>;
   theme: 'Modern' | 'Midnight';
   schedulingRules: SchedulingRules;
+  taskRequirements: TaskRequirement[];
 }
 
 /**
@@ -47,6 +48,8 @@ export interface UseStorageResult {
   saveTask: (task: TaskType) => Promise<void>;
   saveSchedule: (schedule: WeeklySchedule) => Promise<void>;
   saveSettings: (theme: 'Modern' | 'Midnight', rules: SchedulingRules) => Promise<void>;
+  saveTaskRequirement: (requirement: TaskRequirement) => Promise<void>;
+  deleteTaskRequirement: (taskId: string) => Promise<void>;
 
   // Utilities
   exportData: () => Promise<void>;
@@ -121,12 +124,16 @@ export function useStorage(): UseStorageResult {
         // Migrate activity log from localStorage (one-time)
         await migrateActivityLogFromLocalStorage();
 
+        // Load task requirements
+        const taskRequirements = await storage.getAllTaskRequirements();
+
         setInitialData({
           operators: result.operators,
           tasks: result.tasks,
           schedules: result.schedules,
           theme: result.settings.theme,
           schedulingRules: result.settings.schedulingRules,
+          taskRequirements,
         });
 
         setIsFirstTime(result.isFirstTime);
@@ -213,6 +220,22 @@ export function useStorage(): UseStorageResult {
     }
   }, []);
 
+  const saveTaskRequirement = useCallback(async (requirement: TaskRequirement) => {
+    try {
+      await storage.saveTaskRequirement(requirement);
+    } catch (err) {
+      console.error('Failed to save task requirement:', err);
+    }
+  }, []);
+
+  const deleteTaskRequirement = useCallback(async (taskId: string) => {
+    try {
+      await storage.deleteTaskRequirement(taskId);
+    } catch (err) {
+      console.error('Failed to delete task requirement:', err);
+    }
+  }, []);
+
   // Export data as JSON file download
   const exportData = useCallback(async () => {
     try {
@@ -255,6 +278,8 @@ export function useStorage(): UseStorageResult {
     saveTask,
     saveSchedule,
     saveSettings,
+    saveTaskRequirement,
+    deleteTaskRequirement,
     exportData,
     clearAllData,
   };
