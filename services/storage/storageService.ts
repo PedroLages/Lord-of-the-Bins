@@ -1,4 +1,4 @@
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, WeeklyExclusions, PlanningTemplate } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import type { AppSettings } from './database';
 
@@ -81,6 +81,25 @@ export interface StorageService {
   deleteTaskRequirement(taskId: string): Promise<void>;
 
   // ─────────────────────────────────────────────────────────────────
+  // Weekly Exclusions (Leave Management)
+  // ─────────────────────────────────────────────────────────────────
+
+  getWeeklyExclusions(year: number, weekNumber: number): Promise<WeeklyExclusions | undefined>;
+  getWeeklyExclusionsById(id: string): Promise<WeeklyExclusions | undefined>;
+  getAllWeeklyExclusions(): Promise<WeeklyExclusions[]>;
+  saveWeeklyExclusions(exclusions: WeeklyExclusions): Promise<void>;
+  deleteWeeklyExclusions(id: string): Promise<void>;
+
+  // ─────────────────────────────────────────────────────────────────
+  // Planning Templates
+  // ─────────────────────────────────────────────────────────────────
+
+  getAllPlanningTemplates(): Promise<PlanningTemplate[]>;
+  getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined>;
+  savePlanningTemplate(template: PlanningTemplate): Promise<void>;
+  deletePlanningTemplate(id: string): Promise<void>;
+
+  // ─────────────────────────────────────────────────────────────────
   // Bulk Operations
   // ─────────────────────────────────────────────────────────────────
 
@@ -114,6 +133,8 @@ export interface ExportData {
   settings: AppSettings | null;
   activityLog: ActivityLogEntry[];
   taskRequirements?: TaskRequirement[]; // Optional for backwards compatibility
+  weeklyExclusions?: WeeklyExclusions[]; // Optional for backwards compatibility
+  planningTemplates?: PlanningTemplate[]; // Optional for backwards compatibility
 }
 
 /**

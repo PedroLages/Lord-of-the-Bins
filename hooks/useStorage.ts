@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, AppearanceSettings, WeeklyExclusions, FillGapsSettings, PlanningTemplate } from '../types';
+import { DEFAULT_APPEARANCE_SETTINGS, DEFAULT_FILL_GAPS_SETTINGS } from '../types';
 import type { SchedulingRules } from '../services/schedulingService';
 import { storage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError } from '../services/storage';
 import type { AppSettings } from '../services/storage';
@@ -14,6 +15,9 @@ export interface StorageState {
   theme: 'Modern' | 'Midnight';
   schedulingRules: SchedulingRules;
   taskRequirements: TaskRequirement[];
+  skills?: string[];
+  appearance: AppearanceSettings;
+  fillGapsSettings: FillGapsSettings;
 }
 
 /**
@@ -47,9 +51,22 @@ export interface UseStorageResult {
   saveTasks: (tasks: TaskType[]) => Promise<void>;
   saveTask: (task: TaskType) => Promise<void>;
   saveSchedule: (schedule: WeeklySchedule) => Promise<void>;
-  saveSettings: (theme: 'Modern' | 'Midnight', rules: SchedulingRules) => Promise<void>;
+  saveSettings: (theme: 'Modern' | 'Midnight', rules: SchedulingRules, skills?: string[]) => Promise<void>;
   saveTaskRequirement: (requirement: TaskRequirement) => Promise<void>;
   deleteTaskRequirement: (taskId: string) => Promise<void>;
+  saveSkills: (skills: string[]) => Promise<void>;
+  saveAppearance: (appearance: AppearanceSettings) => Promise<void>;
+  saveFillGapsSettings: (settings: FillGapsSettings) => Promise<void>;
+
+  // Weekly Exclusions (Leave Management)
+  getWeeklyExclusions: (year: number, weekNumber: number) => Promise<WeeklyExclusions | undefined>;
+  saveWeeklyExclusions: (exclusions: WeeklyExclusions) => Promise<void>;
+  deleteWeeklyExclusions: (id: string) => Promise<void>;
+
+  // Planning Templates
+  getAllPlanningTemplates: () => Promise<PlanningTemplate[]>;
+  savePlanningTemplate: (template: PlanningTemplate) => Promise<void>;
+  deletePlanningTemplate: (id: string) => Promise<void>;
 
   // Utilities
   exportData: () => Promise<void>;
@@ -134,6 +151,9 @@ export function useStorage(): UseStorageResult {
           theme: result.settings.theme,
           schedulingRules: result.settings.schedulingRules,
           taskRequirements,
+          skills: result.settings.skills,
+          appearance: result.settings.appearance || DEFAULT_APPEARANCE_SETTINGS,
+          fillGapsSettings: result.settings.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS,
         });
 
         setIsFirstTime(result.isFirstTime);
@@ -207,16 +227,67 @@ export function useStorage(): UseStorageResult {
     }
   }, []);
 
-  const saveSettings = useCallback(async (theme: 'Modern' | 'Midnight', rules: SchedulingRules) => {
+  const saveSettings = useCallback(async (theme: 'Modern' | 'Midnight', rules: SchedulingRules, skills?: string[]) => {
     try {
       const settings: AppSettings = {
         id: 'app_settings',
         theme,
         schedulingRules: rules,
+        skills,
       };
       await storage.saveSettings(settings);
     } catch (err) {
       console.error('Failed to save settings:', err);
+    }
+  }, []);
+
+  const saveSkills = useCallback(async (skills: string[]) => {
+    try {
+      const currentSettings = await storage.getSettings();
+      const settings: AppSettings = {
+        id: 'app_settings',
+        theme: currentSettings?.theme || 'Modern',
+        schedulingRules: currentSettings?.schedulingRules || {} as SchedulingRules,
+        skills,
+        appearance: currentSettings?.appearance,
+      };
+      await storage.saveSettings(settings);
+    } catch (err) {
+      console.error('Failed to save skills:', err);
+    }
+  }, []);
+
+  const saveAppearance = useCallback(async (appearance: AppearanceSettings) => {
+    try {
+      const currentSettings = await storage.getSettings();
+      const settings: AppSettings = {
+        id: 'app_settings',
+        theme: currentSettings?.theme || 'Modern',
+        schedulingRules: currentSettings?.schedulingRules || {} as SchedulingRules,
+        skills: currentSettings?.skills,
+        appearance,
+        fillGapsSettings: currentSettings?.fillGapsSettings,
+      };
+      await storage.saveSettings(settings);
+    } catch (err) {
+      console.error('Failed to save appearance:', err);
+    }
+  }, []);
+
+  const saveFillGapsSettings = useCallback(async (fillGapsSettings: FillGapsSettings) => {
+    try {
+      const currentSettings = await storage.getSettings();
+      const settings: AppSettings = {
+        id: 'app_settings',
+        theme: currentSettings?.theme || 'Modern',
+        schedulingRules: currentSettings?.schedulingRules || {} as SchedulingRules,
+        skills: currentSettings?.skills,
+        appearance: currentSettings?.appearance,
+        fillGapsSettings,
+      };
+      await storage.saveSettings(settings);
+    } catch (err) {
+      console.error('Failed to save fill gaps settings:', err);
     }
   }, []);
 
@@ -233,6 +304,58 @@ export function useStorage(): UseStorageResult {
       await storage.deleteTaskRequirement(taskId);
     } catch (err) {
       console.error('Failed to delete task requirement:', err);
+    }
+  }, []);
+
+  // Weekly Exclusions (Leave Management)
+  const getWeeklyExclusions = useCallback(async (year: number, weekNumber: number) => {
+    try {
+      return await storage.getWeeklyExclusions(year, weekNumber);
+    } catch (err) {
+      console.error('Failed to get weekly exclusions:', err);
+      return undefined;
+    }
+  }, []);
+
+  const saveWeeklyExclusions = useCallback(async (exclusions: WeeklyExclusions) => {
+    try {
+      await storage.saveWeeklyExclusions(exclusions);
+    } catch (err) {
+      console.error('Failed to save weekly exclusions:', err);
+    }
+  }, []);
+
+  const deleteWeeklyExclusions = useCallback(async (id: string) => {
+    try {
+      await storage.deleteWeeklyExclusions(id);
+    } catch (err) {
+      console.error('Failed to delete weekly exclusions:', err);
+    }
+  }, []);
+
+  // Planning Templates
+  const getAllPlanningTemplates = useCallback(async () => {
+    try {
+      return await storage.getAllPlanningTemplates();
+    } catch (err) {
+      console.error('Failed to get planning templates:', err);
+      return [];
+    }
+  }, []);
+
+  const savePlanningTemplate = useCallback(async (template: PlanningTemplate) => {
+    try {
+      await storage.savePlanningTemplate(template);
+    } catch (err) {
+      console.error('Failed to save planning template:', err);
+    }
+  }, []);
+
+  const deletePlanningTemplate = useCallback(async (id: string) => {
+    try {
+      await storage.deletePlanningTemplate(id);
+    } catch (err) {
+      console.error('Failed to delete planning template:', err);
     }
   }, []);
 
@@ -278,8 +401,17 @@ export function useStorage(): UseStorageResult {
     saveTask,
     saveSchedule,
     saveSettings,
+    saveSkills,
+    saveAppearance,
+    saveFillGapsSettings,
     saveTaskRequirement,
     deleteTaskRequirement,
+    getWeeklyExclusions,
+    saveWeeklyExclusions,
+    deleteWeeklyExclusions,
+    getAllPlanningTemplates,
+    savePlanningTemplate,
+    deletePlanningTemplate,
     exportData,
     clearAllData,
   };

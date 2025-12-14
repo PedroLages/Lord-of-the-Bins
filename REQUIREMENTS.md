@@ -4,15 +4,115 @@
 
 | Role | Access | Capabilities |
 |------|--------|--------------|
-| Team Leader (Admin) | Full | Everything + permanent delete + override TCs |
-| Team Coordinator (TC) | Their shift only | Schedule, archive operators, create tasks/skills |
+| Team Leader | Own shift only | Everything TC can do + permanent deletes + override TCs + user management |
+| Team Coordinator (TC) | Own shift only | Schedule, archive operators, create tasks/skills |
 | Operators | None | Receive schedule via WhatsApp |
+
+> **Note:** Each shift has its own Team Leader. Team Leaders do NOT have cross-shift access.
 
 ## Shifts Structure
 
 - 2 separate teams (no operator overlap)
+- 1 Team Leader per shift
 - 3 TCs per shift
 - Each shift sees only their own data (team-based isolation)
+
+## Authentication
+
+### Login Methods
+
+| Method | Primary/Secondary | Notes |
+|--------|-------------------|-------|
+| User Code + Password | Primary | Employee ID (e.g., "EMP001") - no email required |
+| Email + Password | Secondary | Alternative for users who prefer email |
+| Magic Link | Fallback | Password reset / alternative login |
+
+### User Code Pattern
+
+- Each user has a unique code (e.g., `EMP001`, `TC-GIEDRIUS`)
+- Codes are shorter and faster to type than emails
+- Email is optional (only needed for password reset)
+
+### Registration Flow
+
+1. Team Leader sends invite via dashboard
+2. User clicks invite link
+3. User sets password + basic profile
+4. Account created with pre-assigned role/shift
+
+## Permission Matrix
+
+### Schedule Management
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| View schedule | ✅ | ✅ |
+| Create/edit draft schedule | ✅ | ✅ |
+| Generate auto-schedule | ✅ | ✅ |
+| Publish schedule | ✅ | ✅ |
+| Lock/unlock own published schedule | ✅ | ✅ |
+| **Unlock ANY locked schedule** | ❌ | ✅ |
+| **Delete schedule history** | ❌ | ✅ |
+
+### Operator Management
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| View operators | ✅ | ✅ |
+| Add new operator | ✅ | ✅ |
+| Edit operator details/skills/availability | ✅ | ✅ |
+| Archive operator (soft delete) | ✅ | ✅ |
+| Restore archived operator | ✅ | ✅ |
+| **Permanent delete operator** | ❌ | ✅ |
+| **Reassign operator to different shift** | ❌ | ✅ |
+
+### Task Management
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| View tasks | ✅ | ✅ |
+| Create/edit/archive task | ✅ | ✅ |
+| **Permanent delete task** | ❌ | ✅ |
+
+### Settings & Configuration
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| Change own theme | ✅ | ✅ |
+| Edit scheduling rules | ✅ | ✅ |
+| Export data (JSON/Excel) | ✅ | ✅ |
+| **Lock scheduling rules** | ❌ | ✅ |
+| **Import data** | ❌ | ✅ |
+| **Clear all data** | ❌ | ✅ |
+
+### User Management
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| View team members | ✅ | ✅ |
+| Change own password/profile | ✅ | ✅ |
+| **Invite new TC** | ❌ | ✅ |
+| **Deactivate TC account** | ❌ | ✅ |
+| **Reset TC password** | ❌ | ✅ |
+
+### Audit & Activity
+
+| Action | TC | Team Leader |
+|--------|:--:|:-----------:|
+| View activity log | ✅ | ✅ |
+| **View full audit trail** | ❌ | ✅ |
+| **Export audit reports** | ❌ | ✅ |
+
+## Future: API Integrations
+
+Potential integration with BOL/CEVA systems:
+
+| Data Source | Integration Type | Purpose |
+|-------------|------------------|---------|
+| Employee Master Data | Import | Auto-sync operator names, codes, shifts |
+| Leave/Sick Systems | Import | Pre-populate unavailability |
+| Training Records | Import | Certified skills list |
+| HR Assignments | Import | Shift A/B membership |
 
 ## Core Features
 
@@ -43,7 +143,7 @@
 - TCs can create new tasks
 - Team Leaders can override/delete tasks
 
-## Operator Management
+## Operator Business Rules
 
 - **Add/Edit**: All TCs
 - **Archive**: TCs (soft delete)

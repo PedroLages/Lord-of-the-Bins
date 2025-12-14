@@ -1,4 +1,4 @@
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, WeeklyExclusions, PlanningTemplate } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import { db, isIndexedDBSupported, type AppSettings } from './database';
 import type { StorageService, ExportData } from './storageService';
@@ -313,18 +313,102 @@ export class IndexedDBStorage implements StorageService {
   }
 
   // ─────────────────────────────────────────────────────────────────
+  // Weekly Exclusions (Leave Management)
+  // ─────────────────────────────────────────────────────────────────
+
+  async getWeeklyExclusions(year: number, weekNumber: number): Promise<WeeklyExclusions | undefined> {
+    try {
+      return await db.weeklyExclusions
+        .where({ year, weekNumber })
+        .first();
+    } catch (error) {
+      throw new StorageError(`Failed to read weekly exclusions: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async getWeeklyExclusionsById(id: string): Promise<WeeklyExclusions | undefined> {
+    try {
+      return await db.weeklyExclusions.get(id);
+    } catch (error) {
+      throw new StorageError(`Failed to read weekly exclusions: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async getAllWeeklyExclusions(): Promise<WeeklyExclusions[]> {
+    try {
+      return await db.weeklyExclusions.toArray();
+    } catch (error) {
+      throw new StorageError(`Failed to read all weekly exclusions: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async saveWeeklyExclusions(exclusions: WeeklyExclusions): Promise<void> {
+    try {
+      await db.weeklyExclusions.put(exclusions);
+    } catch (error) {
+      this.handleWriteError(error);
+    }
+  }
+
+  async deleteWeeklyExclusions(id: string): Promise<void> {
+    try {
+      await db.weeklyExclusions.delete(id);
+    } catch (error) {
+      throw new StorageError(`Failed to delete weekly exclusions: ${error}`, 'WRITE_ERROR');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Planning Templates
+  // ─────────────────────────────────────────────────────────────────
+
+  async getAllPlanningTemplates(): Promise<PlanningTemplate[]> {
+    try {
+      return await db.planningTemplates.orderBy('createdAt').reverse().toArray();
+    } catch (error) {
+      throw new StorageError(`Failed to read planning templates: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined> {
+    try {
+      return await db.planningTemplates.get(id);
+    } catch (error) {
+      throw new StorageError(`Failed to read planning template: ${error}`, 'READ_ERROR');
+    }
+  }
+
+  async savePlanningTemplate(template: PlanningTemplate): Promise<void> {
+    try {
+      await db.planningTemplates.put(template);
+    } catch (error) {
+      this.handleWriteError(error);
+    }
+  }
+
+  async deletePlanningTemplate(id: string): Promise<void> {
+    try {
+      await db.planningTemplates.delete(id);
+    } catch (error) {
+      throw new StorageError(`Failed to delete planning template: ${error}`, 'WRITE_ERROR');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // Bulk Operations
   // ─────────────────────────────────────────────────────────────────
 
   async exportAll(): Promise<ExportData> {
     try {
-      const [operators, tasks, schedules, settings, activityLog, taskRequirements] = await Promise.all([
+      const [operators, tasks, schedules, settings, activityLog, taskRequirements, weeklyExclusions, planningTemplates] = await Promise.all([
         this.getAllOperators(),
         this.getAllTasks(),
         this.getAllSchedules(),
         this.getSettings(),
         this.getActivityLog(),
         this.getAllTaskRequirements(),
+        this.getAllWeeklyExclusions(),
+        this.getAllPlanningTemplates(),
       ]);
 
       return {
@@ -336,6 +420,8 @@ export class IndexedDBStorage implements StorageService {
         settings: settings || null,
         activityLog,
         taskRequirements,
+        weeklyExclusions,
+        planningTemplates,
       };
     } catch (error) {
       throw new StorageError(`Failed to export data: ${error}`, 'READ_ERROR');
@@ -344,7 +430,7 @@ export class IndexedDBStorage implements StorageService {
 
   async importAll(data: ExportData, overwrite: boolean = true): Promise<void> {
     try {
-      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements], async () => {
+      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements, db.weeklyExclusions, db.planningTemplates], async () => {
         if (overwrite) {
           await Promise.all([
             db.operators.clear(),
@@ -353,6 +439,8 @@ export class IndexedDBStorage implements StorageService {
             db.settings.clear(),
             db.activityLog.clear(),
             db.taskRequirements.clear(),
+            db.weeklyExclusions.clear(),
+            db.planningTemplates.clear(),
           ]);
         }
 
@@ -363,6 +451,8 @@ export class IndexedDBStorage implements StorageService {
           data.settings ? db.settings.put(data.settings) : Promise.resolve(),
           db.activityLog.bulkPut(data.activityLog),
           data.taskRequirements ? db.taskRequirements.bulkPut(data.taskRequirements) : Promise.resolve(),
+          data.weeklyExclusions ? db.weeklyExclusions.bulkPut(data.weeklyExclusions) : Promise.resolve(),
+          data.planningTemplates ? db.planningTemplates.bulkPut(data.planningTemplates) : Promise.resolve(),
         ]);
       });
     } catch (error) {
@@ -372,7 +462,7 @@ export class IndexedDBStorage implements StorageService {
 
   async clearAll(): Promise<void> {
     try {
-      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements], async () => {
+      await db.transaction('rw', [db.operators, db.tasks, db.schedules, db.settings, db.activityLog, db.taskRequirements, db.weeklyExclusions, db.planningTemplates], async () => {
         await Promise.all([
           db.operators.clear(),
           db.tasks.clear(),
@@ -380,6 +470,8 @@ export class IndexedDBStorage implements StorageService {
           db.settings.clear(),
           db.activityLog.clear(),
           db.taskRequirements.clear(),
+          db.weeklyExclusions.clear(),
+          db.planningTemplates.clear(),
         ]);
       });
     } catch (error) {

@@ -17,6 +17,7 @@ export interface InitResult {
   settings: {
     theme: 'Modern' | 'Midnight';
     schedulingRules: SchedulingRules;
+    skills?: string[];
   };
 }
 
@@ -72,6 +73,7 @@ export async function initializeStorage(): Promise<InitResult> {
     settings: {
       theme: loadedSettings.theme,
       schedulingRules: loadedSettings.schedulingRules,
+      skills: loadedSettings.skills,
     },
   };
 }

@@ -1,25 +1,43 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import Sidebar from './components/Sidebar';
+import SetupPage from './components/SetupPage';
+import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
   Trash2, Plus, Edit2, Search, Settings, Filter, MoreHorizontal,
-  ChevronDown, ChevronLeft, ChevronRight, BarChart3, Clock, CheckCircle2, Palette, Monitor,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, BarChart3, Clock, CheckCircle2, Palette, Monitor,
   Layout, Moon, Grid, LayoutDashboard, LogOut, Menu, Box, Zap,
   TrendingUp, Activity, PieChart, Bell, Globe, Lock, Unlock, AlertTriangle,
   ArrowRight, Briefcase, Award, UserCheck, Sliders, Puzzle, Shield,
-  Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X
+  Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X,
+  Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
+  Palmtree, Thermometer, GraduationCap, CircleDashed,
+  CalendarX2, Shuffle, Scale, GripVertical, Command,
+  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick
 } from 'lucide-react';
 import {
-  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyStaffingPlan, TaskPlanningRequirement
+  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
+  type DemoUser, type AppearanceSettings, type ColorTheme, COLOR_PALETTES, DEFAULT_APPEARANCE_SETTINGS, getPaletteById, addRecentColor, getContrastTextColor, isColorInPalette, findClosestPaletteIndex,
+  calculateDeltaEHex, MIN_DELTA_E_THRESHOLD, findAccessiblePaletteColors, sortByDeltaEFromColor,
+  isTCTask, getTCFixedColor,
+  type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
+  type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
+  type PlanningTemplate
 } from './types';
+import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
+import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
+import ProfileSettings from './components/ProfileSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
-import { generateSmartSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules } from './services/schedulingService';
+import { Tooltip } from './components/Tooltip';
+import WeeklyAssignButton from './components/WeeklyAssignButton';
+import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule, FillGapsResult } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
   ActivityLogEntry,
@@ -35,6 +53,7 @@ import {
 } from './services/activityLogService';
 import { useStorage } from './hooks/useStorage';
 import { getStorageEstimate, storage } from './services/storage';
+import { feedbackService } from './services/feedbackService';
 
 // --- Theme Configuration ---
 
@@ -84,14 +103,29 @@ function App() {
     saveTask,
     saveSchedule,
     saveSettings,
+    saveSkills,
+    saveAppearance,
     saveTaskRequirement,
     deleteTaskRequirement,
     exportData,
+    getWeeklyExclusions,
+    saveWeeklyExclusions,
+    deleteWeeklyExclusions,
+    saveFillGapsSettings,
+    getAllPlanningTemplates,
+    savePlanningTemplate,
+    deletePlanningTemplate,
   } = useStorage();
 
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Auth state
+  const [authChecking, setAuthChecking] = useState(true);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
 
   // Toast system
   const toast = useToasts();
@@ -106,10 +140,18 @@ function App() {
   // App State - will be populated from storage
   const [operators, setOperators] = useState<Operator[]>([]);
   const [tasks, setTasks] = useState<TaskType[]>([]);
+  const [skills, setSkills] = useState<string[]>(INITIAL_SKILLS);
+  const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE_SETTINGS);
+  const [fillGapsSettings, setFillGapsSettings] = useState<FillGapsSettings>(DEFAULT_FILL_GAPS_SETTINGS);
 
   // Week Navigation State - Initialize with current week dynamically
   const [currentWeek, setCurrentWeek] = useState<WeeklySchedule>(() => createEmptyWeek(new Date()));
   const [scheduleHistory, setScheduleHistory] = useState<Record<string, WeeklySchedule>>({});
+
+  // Plan Builder Violations State
+  const [planBuilderViolations, setPlanBuilderViolations] = useState<PlanBuilderViolation[]>([]);
+  const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
+  const [showCriticalWarningsModal, setShowCriticalWarningsModal] = useState(false);
 
   // Initialize state from storage when data is loaded
   useEffect(() => {
@@ -120,6 +162,9 @@ function App() {
       setTheme(initialData.theme);
       setSchedulingRules(initialData.schedulingRules);
       setTaskRequirements(initialData.taskRequirements || []);
+      setSkills(initialData.skills || INITIAL_SKILLS);
+      setAppearance(initialData.appearance || DEFAULT_APPEARANCE_SETTINGS);
+      setFillGapsSettings(initialData.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS);
 
       // Try to load current week from schedule history
       const now = new Date();
@@ -136,6 +181,15 @@ function App() {
       }
     }
   }, [loadingState, initialData, dataInitialized, isFirstTime]);
+
+  // Load planning templates when data is initialized
+  useEffect(() => {
+    if (dataInitialized) {
+      getAllPlanningTemplates().then(templates => {
+        setPlanningTemplates(templates);
+      });
+    }
+  }, [dataInitialized, getAllPlanningTemplates]);
 
   // Auto-save operators when they change
   useEffect(() => {
@@ -167,6 +221,38 @@ function App() {
     }
   }, [scheduleHistory, dataInitialized, saveSchedule]);
 
+  // Load exclusions when the week changes
+  useEffect(() => {
+    if (dataInitialized && currentWeek) {
+      const weekKey = `${currentWeek.year}-W${currentWeek.weekNumber}`;
+      // Only load if not already in state
+      if (!weeklyExclusions[weekKey]) {
+        getWeeklyExclusions(currentWeek.year, currentWeek.weekNumber).then(exclusions => {
+          if (exclusions) {
+            setWeeklyExclusions(prev => ({
+              ...prev,
+              [weekKey]: exclusions
+            }));
+          }
+        });
+      }
+    }
+  }, [currentWeek?.year, currentWeek?.weekNumber, dataInitialized, getWeeklyExclusions]);
+
+  // Auto-save appearance settings when they change
+  useEffect(() => {
+    if (dataInitialized) {
+      saveAppearance(appearance);
+    }
+  }, [appearance, dataInitialized, saveAppearance]);
+
+  // Auto-save fill gaps settings when they change
+  useEffect(() => {
+    if (dataInitialized) {
+      saveFillGapsSettings(fillGapsSettings);
+    }
+  }, [fillGapsSettings, dataInitialized, saveFillGapsSettings]);
+
   // Publish Modal State
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishWithLock, setPublishWithLock] = useState(false);
@@ -177,6 +263,25 @@ function App() {
 
   // Planning Modal State
   const [showPlanningModal, setShowPlanningModal] = useState(false);
+  const [weeklyPlanningConfigs, setWeeklyPlanningConfigs] = useState<Record<string, WeeklyPlanningConfig>>({});
+  const [weeklyExclusions, setWeeklyExclusions] = useState<Record<string, WeeklyExclusions>>({});
+  const [planningTemplates, setPlanningTemplates] = useState<PlanningTemplate[]>([]);
+
+  // Feedback Modal State
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackItems, setFeedbackItems] = useState<FeedbackItem[]>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(true);
+
+  // Load feedback from service on mount
+  useEffect(() => {
+    const loadFeedback = async () => {
+      setFeedbackLoading(true);
+      const items = await feedbackService.getAll();
+      setFeedbackItems(items);
+      setFeedbackLoading(false);
+    };
+    loadFeedback();
+  }, []);
 
   // Command Palette State
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -189,16 +294,166 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
+  // Check auth state on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        // First check if any users exist
+        const usersExist = await hasUsers();
+        if (!usersExist) {
+          setNeedsSetup(true);
+          setAuthChecking(false);
+          return;
+        }
+
+        // Check if user is logged in
+        const user = await getCurrentUser();
+        if (user) {
+          setCurrentUser(user);
+          // Apply user's theme preference
+          if (user.preferences?.theme) {
+            setTheme(user.preferences.theme);
+          }
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  // Handle sign out
+  const handleSignOut = useCallback(() => {
+    authLogout();
+    setCurrentUser(null);
+    toast.info('Signed out successfully');
+  }, [toast]);
+
+  // Handle setup complete
+  const handleSetupComplete = useCallback(async () => {
+    setNeedsSetup(false);
+    // After setup, user should now log in
+    setAuthChecking(false);
+  }, []);
+
+  // Handle login
+  const handleLogin = useCallback((user: DemoUser) => {
+    setCurrentUser(user);
+    if (user.preferences?.theme) {
+      setTheme(user.preferences.theme);
+    }
+    toast.success(`Welcome back, ${user.displayName}!`);
+  }, [toast]);
+
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'tasks' | 'requirements' | 'automation' | 'integrations' | 'data'>('tasks');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile'>('appearance');
+
+  // Active color palette (computed from appearance settings)
+  const activePalette = useMemo(() => {
+    return getPaletteById(appearance.activeThemeId, appearance.customThemes) || COLOR_PALETTES[0];
+  }, [appearance.activeThemeId, appearance.customThemes]);
 
   // Task requirements state
   const [taskRequirements, setTaskRequirements] = useState<TaskRequirement[]>([]);
+  // Excluded tasks for the current week (from Plan Builder)
+  const [excludedTasks, setExcludedTasks] = useState<string[]>([]);
+
+  // Tasks tab state (for task management section)
+  const [taskSearch, setTaskSearch] = useState('');
+  const [skillFilter, setSkillFilter] = useState<string>('all');
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  // Add Task modal state
+  const [showAddTaskModal, setShowAddTaskModal] = useState(false);
+  const [newTaskName, setNewTaskName] = useState('');
+  const [newTaskSkill, setNewTaskSkill] = useState('');
+  const [newTaskColor, setNewTaskColor] = useState('#6366f1');
+
+  // Apply palette to tasks modal state
+  const [showApplyPaletteModal, setShowApplyPaletteModal] = useState(false);
+
+  // Helper to convert TaskRequirement[] to the format validateSchedule expects
+  // Returns Record<string, Record<string, number>> (taskId -> day -> total count)
+  // Only includes tasks that have explicitly configured requirements in Staffing Settings
+  // Tasks without configured requirements will use their default requiredOperators value
+  const getValidationRequirements = useCallback((): Record<string, Record<string, number>> => {
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const result: Record<string, Record<string, number>> = {};
+
+    // ONLY include tasks that have explicit requirements configured
+    // This allows tasks WITHOUT explicit requirements to fall back to their default requiredOperators
+    taskRequirements.forEach(req => {
+      if (!req.enabled) return; // Skip disabled requirements
+
+      result[req.taskId] = {};
+      daysList.forEach(day => {
+        // Check for daily override first, then fall back to default
+        const requirements = req.dailyOverrides?.[day] || req.defaultRequirements;
+
+        // Sum up total operators needed (across all types)
+        const totalRequired = requirements.reduce((sum, r) => sum + r.count, 0);
+        result[req.taskId][day] = totalRequired;
+      });
+    });
+
+    return result;
+  }, [taskRequirements]);
+
+  // Validate Plan Builder requirements whenever schedule or requirements change
+  useEffect(() => {
+    const violations = validatePlanBuilderRequirements(currentWeek, tasks, taskRequirements, excludedTasks);
+    setPlanBuilderViolations(violations);
+  }, [currentWeek, tasks, taskRequirements, excludedTasks]);
+
+  // Toast notifications for Plan Builder violations
+  const previousViolationsCount = useRef<number>(0);
+  useEffect(() => {
+    // Skip toast on initial mount (when previous count is 0 and data is just loading)
+    if (!dataInitialized) {
+      previousViolationsCount.current = planBuilderViolations.length;
+      return;
+    }
+
+    const currentCount = planBuilderViolations.length;
+    const previousCount = previousViolationsCount.current;
+
+    // Show toast when violations appear
+    if (currentCount > 0 && previousCount === 0) {
+      toast.warning(
+        'Plan Builder Requirements Not Met',
+        `${currentCount} ${currentCount === 1 ? 'violation' : 'violations'} detected. Check cells with purple indicators.`
+      );
+    }
+    // Show toast when all violations are resolved
+    else if (currentCount === 0 && previousCount > 0) {
+      toast.success(
+        'Plan Builder Requirements Satisfied',
+        'All requirements are now met!'
+      );
+    }
+    // Show toast when violations increase significantly (>= 2 new violations)
+    else if (currentCount > previousCount && currentCount - previousCount >= 2) {
+      toast.warning(
+        'New Violations Detected',
+        `${currentCount - previousCount} new violations found. Total: ${currentCount}`
+      );
+    }
+
+    previousViolationsCount.current = currentCount;
+  }, [planBuilderViolations, dataInitialized, toast]);
 
   // Data Management State
   const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<TaskType | null>(null);
+  const [skillToDelete, setSkillToDelete] = useState<string | null>(null);
+  const [newSkillName, setNewSkillName] = useState('');
+  const [editingSkill, setEditingSkill] = useState<string | null>(null);
+  const [editingSkillName, setEditingSkillName] = useState('');
 
   // Team Filter State
   const [teamFilter, setTeamFilter] = useState<'All' | 'Regular' | 'Flex' | 'Coordinator'>('All');
@@ -221,6 +476,8 @@ function App() {
 
   // Scheduling State
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showFillGapsPreview, setShowFillGapsPreview] = useState(false);
+  const [fillGapsResult, setFillGapsResult] = useState<FillGapsResult | null>(null);
   const [selectedCell, setSelectedCell] = useState<{opId: string, dayIndex: number} | null>(null);
   const [dragInfo, setDragInfo] = useState<{opId: string; dayIndex: number; taskId: string | null} | null>(null);
 
@@ -228,6 +485,34 @@ function App() {
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // format: "opId-dayIndex"
   const [selectionAnchor, setSelectionAnchor] = useState<{opId: string, dayIndex: number} | null>(null);
   const [showBulkAssignMenu, setShowBulkAssignMenu] = useState(false);
+
+  // Range selection preview state (for Shift+Hover)
+  const [rangePreviewCells, setRangePreviewCells] = useState<Set<string>>(new Set());
+
+  // Undo/Redo history for bulk operations
+  interface ScheduleHistoryEntry {
+    timestamp: number;
+    action: 'assign' | 'clear' | 'smart-fill' | 'bulk-assign';
+    changes: Array<{
+      opId: string;
+      dayIndex: number;
+      before: { taskId: string | null; locked: boolean; pinned: boolean };
+      after: { taskId: string | null; locked: boolean; pinned: boolean };
+    }>;
+    description: string;
+  }
+  const [historyStack, setHistoryStack] = useState<ScheduleHistoryEntry[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+
+  // Schedule view state
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isCompactView, setIsCompactView] = useState(false);
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
+
+  // Schedule search/filter state
+  const [scheduleSearchFilter, setScheduleSearchFilter] = useState('');
+  const scheduleSearchRef = useRef<HTMLInputElement>(null);
 
   // Modal State
   const [isOperatorModalOpen, setIsOperatorModalOpen] = useState(false);
@@ -242,22 +527,39 @@ function App() {
     }
   }, [theme]);
 
-  // Keyboard shortcut: Cmd+K (Mac) / Ctrl+K (Windows) to open command palette
+  // Keyboard shortcut: Cmd+K (Mac) / Ctrl+K (Windows) to focus schedule search or open command palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        setShowCommandPalette(prev => !prev);
+        // If on schedule tab and search ref exists, focus the search input
+        if (activeTab === 'schedule' && scheduleSearchRef.current) {
+          scheduleSearchRef.current.focus();
+          scheduleSearchRef.current.select();
+        } else {
+          // Otherwise open command palette
+          setShowCommandPalette(prev => !prev);
+        }
+      }
+      // ESC to clear schedule search when focused
+      if (e.key === 'Escape' && document.activeElement === scheduleSearchRef.current) {
+        setScheduleSearchFilter('');
+        scheduleSearchRef.current?.blur();
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [activeTab]);
 
   // Scheduling State (moved before stats useMemo to avoid reference error)
   const [schedulingRules, setSchedulingRules] = useState<SchedulingRules>(DEFAULT_RULES);
   const [scheduleWarnings, setScheduleWarnings] = useState<ScheduleWarning[]>([]);
+
+  // Warnings Modal UI State
+  const [showWarningsModal, setShowWarningsModal] = useState(false);
+  const [warningsFilter, setWarningsFilter] = useState<ScheduleWarning['type'] | 'all'>('all');
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
 
   // Auto-save settings (theme + scheduling rules) when they change
   useEffect(() => {
@@ -360,17 +662,121 @@ function App() {
     }
   };
 
+  // Handle feedback submission
+  const handleSubmitFeedback = async (feedback: FeedbackItem) => {
+    // Optimistically update UI
+    setFeedbackItems(prev => [feedback, ...prev]);
+
+    // Submit to service (handles both Supabase and localStorage)
+    const result = await feedbackService.submit(feedback);
+
+    if (result.success) {
+      toast.success('Thank you for your feedback!');
+    } else {
+      toast.error('Failed to submit feedback. It has been saved locally.');
+    }
+  };
+
+  // Handle feedback status update
+  const handleFeedbackStatusChange = async (id: string, newStatus: FeedbackStatus) => {
+    // Optimistically update UI
+    setFeedbackItems(prev =>
+      prev.map(f => f.id === id ? { ...f, status: newStatus, updatedAt: new Date().toISOString() } : f)
+    );
+
+    await feedbackService.updateStatus(id, newStatus);
+  };
+
+  // Handle feedback delete
+  const handleFeedbackDelete = async (id: string) => {
+    // Optimistically update UI
+    setFeedbackItems(prev => prev.filter(f => f.id !== id));
+
+    await feedbackService.delete(id);
+    toast.info('Feedback deleted');
+  };
+
+  // Handle clear all feedback
+  const handleFeedbackClearAll = async () => {
+    if (confirm('Are you sure you want to clear all feedback? This cannot be undone.')) {
+      setFeedbackItems([]);
+      await feedbackService.clearAll();
+      toast.info('All feedback cleared');
+    }
+  };
+
+  // Helper function to get human-readable color name from hex
+  const getColorName = (hex: string): string => {
+    const colorNames: Record<string, string> = {
+      '#ef4444': 'Red', '#f97316': 'Orange', '#f59e0b': 'Amber', '#eab308': 'Yellow',
+      '#84cc16': 'Lime', '#22c55e': 'Green', '#10b981': 'Emerald', '#14b8a6': 'Teal',
+      '#06b6d4': 'Cyan', '#0ea5e9': 'Sky', '#3b82f6': 'Blue', '#6366f1': 'Indigo',
+      '#8b5cf6': 'Violet', '#a855f7': 'Purple', '#d946ef': 'Fuchsia', '#ec4899': 'Pink',
+      '#f43f5e': 'Rose', '#78716c': 'Stone', '#64748b': 'Slate', '#6b7280': 'Gray',
+      '#000000': 'Black', '#ffffff': 'White',
+    };
+
+    // Check for exact match first
+    const lowerHex = hex.toLowerCase();
+    if (colorNames[lowerHex]) return colorNames[lowerHex];
+
+    // Find closest color by hue
+    const hexToHsl = (h: string) => {
+      const r = parseInt(h.slice(1, 3), 16) / 255;
+      const g = parseInt(h.slice(3, 5), 16) / 255;
+      const b = parseInt(h.slice(5, 7), 16) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      if (max === min) return { h: 0, s: 0, l };
+      const d = max - min;
+      const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      let hue = 0;
+      if (max === r) hue = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      else if (max === g) hue = ((b - r) / d + 2) / 6;
+      else hue = ((r - g) / d + 4) / 6;
+      return { h: hue * 360, s, l };
+    };
+
+    const targetHsl = hexToHsl(hex);
+    const hueRanges = [
+      { name: 'Red', min: 345, max: 360 }, { name: 'Red', min: 0, max: 15 },
+      { name: 'Orange', min: 15, max: 45 }, { name: 'Yellow', min: 45, max: 70 },
+      { name: 'Green', min: 70, max: 170 }, { name: 'Cyan', min: 170, max: 200 },
+      { name: 'Blue', min: 200, max: 260 }, { name: 'Purple', min: 260, max: 290 },
+      { name: 'Pink', min: 290, max: 345 },
+    ];
+
+    if (targetHsl.s < 0.1) return targetHsl.l > 0.5 ? 'Light Gray' : 'Dark Gray';
+    for (const range of hueRanges) {
+      if (targetHsl.h >= range.min && targetHsl.h < range.max) return range.name;
+    }
+    return 'Custom';
+  };
+
+  const openAddTaskModal = () => {
+    setNewTaskName('');
+    setNewTaskSkill(skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting');
+    setNewTaskColor('#6366f1');
+    setShowAddTaskModal(true);
+  };
+
   const handleAddNewTask = () => {
+    if (!newTaskName.trim()) {
+      addToast('warning', 'Please enter a task name');
+      return;
+    }
     const newTaskId = `t${Date.now()}`;
     const newTask: TaskType = {
       id: newTaskId,
-      name: 'New Task',
-      color: '#6366f1', // Default indigo color
+      name: newTaskName.trim(),
+      color: newTaskColor,
       textColor: '#ffffff',
-      requiredSkill: INITIAL_SKILLS[0],
+      requiredSkill: newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting',
       requiredOperators: 1,
     };
     setTasks(prev => [...prev, newTask]);
+    setShowAddTaskModal(false);
+    addToast('success', `Task "${newTaskName.trim()}" created`);
   };
 
   const handleUpdateTaskRequiredOperators = (taskId: string, count: number) => {
@@ -492,7 +898,7 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
     setScheduleWarnings(warnings);
   };
 
@@ -559,7 +965,7 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
     setScheduleWarnings(warnings);
   };
 
@@ -570,6 +976,31 @@ function App() {
 
   // Check if a cell is in the multi-selection
   const isCellSelected = (opId: string, dayIndex: number) => selectedCells.has(getCellKey(opId, dayIndex));
+
+  // Check if a cell is in the range preview
+  const isCellInRangePreview = (opId: string, dayIndex: number) => rangePreviewCells.has(getCellKey(opId, dayIndex));
+
+  // Handle cell hover for Shift+Hover preview
+  const handleCellHover = (opId: string, dayIndex: number, event: React.MouseEvent, isHovering: boolean) => {
+    // Only show preview if Shift is pressed and we have a selection anchor in the same row
+    if (isHovering && event.shiftKey && selectionAnchor && selectionAnchor.opId === opId) {
+      const startDay = Math.min(selectionAnchor.dayIndex, dayIndex);
+      const endDay = Math.max(selectionAnchor.dayIndex, dayIndex);
+
+      const previewSet = new Set<string>();
+      for (let d = startDay; d <= endDay; d++) {
+        // Only add to preview if not already selected
+        const key = getCellKey(opId, d);
+        if (!selectedCells.has(key)) {
+          previewSet.add(key);
+        }
+      }
+      setRangePreviewCells(previewSet);
+    } else if (!isHovering) {
+      // Clear preview when mouse leaves
+      setRangePreviewCells(new Set());
+    }
+  };
 
   // Handle cell click with modifiers for multi-selection
   const handleCellClick = (opId: string, dayIndex: number, event: React.MouseEvent) => {
@@ -598,12 +1029,37 @@ function App() {
     }
 
     // Shift + Click: Select range from anchor
-    if (event.shiftKey && selectionAnchor && selectionAnchor.opId === opId) {
+    if (event.shiftKey) {
       event.preventDefault();
       setSelectedCell(null);
 
-      const startDay = Math.min(selectionAnchor.dayIndex, dayIndex);
-      const endDay = Math.max(selectionAnchor.dayIndex, dayIndex);
+      // If no anchor exists, try to use the first selected cell in this row as anchor
+      let anchor = selectionAnchor;
+      if (!anchor && selectedCells.size > 0) {
+        // Find the first selected cell in this row
+        const firstInRow = Array.from(selectedCells).find(key => key.startsWith(`${opId}-`));
+        if (firstInRow) {
+          const [, dayStr] = firstInRow.split('-');
+          anchor = { opId, dayIndex: parseInt(dayStr, 10) };
+        }
+      }
+
+      // If still no anchor, just select this cell and set it as anchor
+      if (!anchor) {
+        setSelectedCells(new Set([cellKey]));
+        setSelectionAnchor({ opId, dayIndex });
+        toast.info('Range Selection', 'First cell selected. Shift+Click another cell in this row to select range.');
+        return;
+      }
+
+      // Check if same row
+      if (anchor.opId !== opId) {
+        toast.warning('Range Selection', 'Range selection only works within the same row (same operator).');
+        return;
+      }
+
+      const startDay = Math.min(anchor.dayIndex, dayIndex);
+      const endDay = Math.max(anchor.dayIndex, dayIndex);
 
       setSelectedCells(prev => {
         const newSet = new Set(prev);
@@ -612,6 +1068,8 @@ function App() {
         }
         return newSet;
       });
+
+      // Keep the anchor for potential further range selections
       return;
     }
 
@@ -637,6 +1095,13 @@ function App() {
 
     const newSchedule = { ...currentWeek };
     let assignmentCount = 0;
+    let skippedCount = 0;
+    const changes: Array<{
+      opId: string;
+      dayIndex: number;
+      before: { taskId: string | null; locked: boolean; pinned: boolean };
+      after: { taskId: string | null; locked: boolean; pinned: boolean };
+    }> = [];
 
     selectedCells.forEach(cellKey => {
       const [opId, dayIndexStr] = cellKey.split('-');
@@ -647,19 +1112,60 @@ function App() {
         day.assignments[opId] = { taskId: null, locked: false };
       }
 
+      const currentAssignment = day.assignments[opId];
+
+      // Skip locked or pinned cells
+      if (currentAssignment.locked || currentAssignment.pinned) {
+        skippedCount++;
+        return;
+      }
+
+      // Capture before state for undo
+      const before = {
+        taskId: currentAssignment.taskId,
+        locked: currentAssignment.locked || false,
+        pinned: currentAssignment.pinned || false,
+      };
+
       // If selecting "Off/Unassigned" (null), clear pinned status so Smart Fill can reassign
       // If selecting a real task, mark as pinned to protect from Smart Fill
       const isPinned = taskId !== null;
-      day.assignments[opId] = {
-        ...day.assignments[opId],
+      const after = {
         taskId,
         locked: isPinned,
         pinned: isPinned,
       };
+
+      day.assignments[opId] = { ...currentAssignment, ...after };
       assignmentCount++;
+
+      changes.push({ opId, dayIndex, before, after });
     });
 
+    // If nothing was assigned, show warning and return
+    if (assignmentCount === 0) {
+      toast.warning(`All ${skippedCount} selected cells are locked and cannot be modified`);
+      return;
+    }
+
     setCurrentWeek(newSchedule);
+
+    // Add to history stack for undo
+    const taskName = taskId ? tasks.find(t => t.id === taskId)?.name || 'Task' : 'Off';
+    const historyEntry: ScheduleHistoryEntry = {
+      timestamp: Date.now(),
+      action: 'bulk-assign',
+      changes,
+      description: `Assigned "${taskName}" to ${assignmentCount} cells`,
+    };
+
+    setHistoryStack(prev => {
+      const newStack = prev.slice(0, historyIndex + 1); // Remove any "future" history
+      newStack.push(historyEntry);
+      // Keep only last 30 entries
+      return newStack.slice(-30);
+    });
+    setHistoryIndex(prev => Math.min(prev + 1, 29));
 
     // Clear selection after assignment
     setSelectedCells(new Set());
@@ -667,7 +1173,6 @@ function App() {
     setShowBulkAssignMenu(false);
 
     // Log the bulk assignment
-    const taskName = taskId ? tasks.find(t => t.id === taskId)?.name || 'Task' : 'Off';
     const entry = logAssignmentChange(
       `${assignmentCount} cells`,
       'multiple days',
@@ -676,8 +1181,12 @@ function App() {
     );
     setActivityLog(prev => [entry, ...prev]);
 
-    // Show toast
-    toast.success(`Assigned "${taskName}" to ${assignmentCount} cells`);
+    // Show toast with skip info if applicable
+    if (skippedCount > 0) {
+      toast.success(`Assigned "${taskName}" to ${assignmentCount} cells (${skippedCount} locked cells skipped)`);
+    } else {
+      toast.success(`Assigned "${taskName}" to ${assignmentCount} cells`);
+    }
 
     // Run validation
     const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -685,22 +1194,219 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList);
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
     setScheduleWarnings(warnings);
   };
 
-  // Clear multi-selection on Escape
+  // Handle weekly assignment (assign task to all 5 days for a specific operator)
+  const handleWeeklyAssign = (operatorId: string, taskId: string) => {
+    if (currentWeek.locked) {
+      toast.warning('Schedule is locked', 'Unlock to make changes');
+      return;
+    }
+
+    const operator = operators.find(op => op.id === operatorId);
+    const task = tasks.find(t => t.id === taskId);
+    if (!operator || !task) return;
+
+    const newSchedule = { ...currentWeek };
+    let assignmentCount = 0;
+    let skippedCount = 0;
+    const changes: Array<{
+      opId: string;
+      dayIndex: number;
+      before: { taskId: string | null; locked: boolean; pinned: boolean };
+      after: { taskId: string | null; locked: boolean; pinned: boolean };
+    }> = [];
+
+    // Assign to all 5 days (Mon-Fri)
+    newSchedule.days.forEach((day, dayIndex) => {
+      const currentAssignment = day.assignments[operatorId] || { taskId: null, locked: false };
+
+      // Skip locked or pinned cells
+      if (currentAssignment.locked || currentAssignment.pinned) {
+        skippedCount++;
+        return;
+      }
+
+      // Capture before state
+      const before = {
+        taskId: currentAssignment.taskId,
+        locked: currentAssignment.locked || false,
+        pinned: currentAssignment.pinned || false,
+      };
+
+      // Assign the task and mark as pinned to protect from Smart Fill
+      day.assignments[operatorId] = {
+        ...currentAssignment,
+        taskId: taskId,
+        locked: true,
+        pinned: true,
+      };
+
+      // Capture after state
+      const after = {
+        taskId: taskId,
+        locked: true,
+        pinned: true,
+      };
+
+      changes.push({ opId: operatorId, dayIndex, before, after });
+      assignmentCount++;
+    });
+
+    // If nothing was assigned, show warning and return
+    if (assignmentCount === 0) {
+      toast.warning('All days locked', `All ${skippedCount} days for ${operator.name} are locked`);
+      return;
+    }
+
+    // Apply the changes
+    setCurrentWeek(newSchedule);
+
+    // Add to history stack
+    const historyEntry: ScheduleHistoryEntry = {
+      timestamp: Date.now(),
+      action: 'bulk-assign',
+      changes,
+      description: `Assigned "${task.name}" to ${operator.name} for entire week`,
+    };
+
+    setHistoryStack(prev => {
+      const newStack = prev.slice(0, historyIndex + 1);
+      newStack.push(historyEntry);
+      return newStack.slice(-30); // Keep only last 30 entries
+    });
+    setHistoryIndex(prev => Math.min(prev + 1, 29));
+
+    // Log the activity
+    const entry = logAssignmentChange(
+      operator.name,
+      'entire week',
+      null,
+      task.name
+    );
+    setActivityLog(prev => [entry, ...prev]);
+
+    // Show toast
+    if (skippedCount > 0) {
+      toast.success(`Assigned "${task.name}" to ${operator.name} for ${assignmentCount} days (${skippedCount} locked days skipped)`);
+    } else {
+      toast.success(`Assigned "${task.name}" to ${operator.name} for entire week`);
+    }
+
+    // Run validation
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    setScheduleWarnings(warnings);
+  };
+
+  // Undo the last bulk operation
+  const handleUndo = () => {
+    if (historyIndex < 0 || historyStack.length === 0) return;
+
+    const entry = historyStack[historyIndex];
+    const newSchedule = { ...currentWeek };
+
+    // Restore the "before" state for all changes in this entry
+    entry.changes.forEach(({ opId, dayIndex, before }) => {
+      const day = newSchedule.days[dayIndex];
+      if (!day.assignments[opId]) {
+        day.assignments[opId] = { taskId: null, locked: false };
+      }
+      day.assignments[opId] = {
+        ...day.assignments[opId],
+        taskId: before.taskId,
+        locked: before.locked,
+        pinned: before.pinned,
+      };
+    });
+
+    setCurrentWeek(newSchedule);
+    setHistoryIndex(prev => prev - 1);
+
+    // Show toast
+    toast.info(`Undone: ${entry.description}`);
+
+    // Re-validate schedule
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    setScheduleWarnings(warnings);
+  };
+
+  // Redo the next bulk operation
+  const handleRedo = () => {
+    if (historyIndex >= historyStack.length - 1) return;
+
+    const entry = historyStack[historyIndex + 1];
+    const newSchedule = { ...currentWeek };
+
+    // Restore the "after" state for all changes in this entry
+    entry.changes.forEach(({ opId, dayIndex, after }) => {
+      const day = newSchedule.days[dayIndex];
+      if (!day.assignments[opId]) {
+        day.assignments[opId] = { taskId: null, locked: false };
+      }
+      day.assignments[opId] = {
+        ...day.assignments[opId],
+        taskId: after.taskId,
+        locked: after.locked,
+        pinned: after.pinned,
+      };
+    });
+
+    setCurrentWeek(newSchedule);
+    setHistoryIndex(prev => prev + 1);
+
+    // Show toast
+    toast.info(`Redone: ${entry.description}`);
+
+    // Re-validate schedule
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    setScheduleWarnings(warnings);
+  };
+
+  // Keyboard shortcuts: Escape, Undo (Ctrl/Cmd+Z), Redo (Ctrl/Cmd+Shift+Z)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape: Clear selection
       if (e.key === 'Escape' && selectedCells.size > 0) {
         setSelectedCells(new Set());
         setSelectionAnchor(null);
         setShowBulkAssignMenu(false);
+        return;
+      }
+
+      // Undo: Ctrl/Cmd+Z (without Shift)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Redo: Ctrl/Cmd+Shift+Z
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        handleRedo();
+        return;
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedCells.size]);
+  }, [selectedCells.size, historyIndex, historyStack, currentWeek]);
 
   // --- Week Navigation Handlers ---
 
@@ -747,6 +1453,25 @@ function App() {
   // --- Publish Handlers ---
 
   const handlePublishSchedule = () => {
+    // Check if there are any warnings (critical or regular) that need acknowledgment
+    if (scheduleWarnings.length > 0 && !warningsAcknowledged) {
+      setShowPublishModal(false); // Close the publish modal
+      setShowCriticalWarningsModal(true); // Show warnings acknowledgment modal
+      return;
+    }
+
+    // Check for Plan Builder violations (soft blockers - can be overridden)
+    if (planBuilderViolations.length > 0) {
+      setShowPublishModal(false); // Close the publish modal
+      setShowPublishConfirmModal(true); // Show confirmation modal
+      return;
+    }
+
+    // No violations, proceed with publishing
+    handlePublishScheduleConfirmed();
+  };
+
+  const handlePublishScheduleConfirmed = () => {
     const publishedWeek: WeeklySchedule = {
       ...currentWeek,
       status: 'Published',
@@ -764,7 +1489,10 @@ function App() {
     setActivityLog(prev => [entry, ...prev]);
 
     setShowPublishModal(false);
+    setShowPublishConfirmModal(false);
+    setShowCriticalWarningsModal(false);
     setPublishWithLock(false);
+    setWarningsAcknowledged(false); // Reset acknowledgment for next time
   };
 
   const handleUnpublishSchedule = () => {
@@ -805,6 +1533,17 @@ function App() {
   // Check if editing is allowed
   const canEdit = !currentWeek.locked;
 
+  // Get current week's exclusions for the schedule grid
+  const currentWeekExclusions = weeklyExclusions[`${currentWeek.year}-W${currentWeek.weekNumber}`] || null;
+
+  // Icon map for exclusion reasons
+  const ExclusionIconMap: Record<ExclusionReason, React.FC<{ className?: string }>> = {
+    vacation: Palmtree,
+    sick: Thermometer,
+    training: GraduationCap,
+    other: CircleDashed,
+  };
+
   const handleAutoSchedule = () => {
     setIsGenerating(true);
     try {
@@ -816,28 +1555,31 @@ function App() {
         currentAssignmentsMap[idx] = day.assignments;
       });
 
-      const result = generateSmartSchedule({
+      const scheduleResult = generateOptimizedSchedule({
         operators,
         tasks,
         days: daysList,
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
-        taskRequirements
+        taskRequirements,
+        excludedTasks
       });
+
+      // Handle both single schedule and multi-objective array results
+      const result = Array.isArray(scheduleResult) ? scheduleResult[0].schedule : scheduleResult;
 
       if (result && result.assignments) {
         const newSchedule = { ...currentWeek };
         let assignmentCount = 0;
 
-        // First, clear assignments for operators on days they're NOT available
-        // (unless the assignment is locked or pinned)
+        // First, clear ALL non-locked/non-pinned assignments before applying new ones
+        // This ensures stale assignments don't persist when Plan Builder limits change
         daysList.forEach((day, dayIndex) => {
           operators.forEach(op => {
             const existingAssignment = newSchedule.days[dayIndex]?.assignments[op.id];
-            // If operator is NOT available on this day AND has an assignment that's not locked/pinned
-            if (!op.availability[day] && existingAssignment && existingAssignment.taskId) {
+            if (existingAssignment && existingAssignment.taskId) {
               if (!existingAssignment.locked && !existingAssignment.pinned) {
-                // Clear the assignment - operator is not available
+                // Clear the assignment - will be replaced by algorithm result
                 newSchedule.days[dayIndex].assignments[op.id] = {
                   taskId: null,
                   locked: false,
@@ -906,50 +1648,357 @@ function App() {
     }
   };
 
+  // Handle Fill Gaps button click - shows preview modal
+  const handleFillGaps = () => {
+    // Build excluded operators map from current week's exclusions
+    const weekKey = `${currentWeek.year}-W${currentWeek.weekNumber}`;
+    const exclusions = weeklyExclusions[weekKey];
+    const excludedOperatorsMap: Record<string, WeekDay[] | null> = {};
+
+    if (exclusions?.excludedOperators) {
+      exclusions.excludedOperators.forEach(op => {
+        if (op.excludedDays === null || op.excludedDays.length === 0) {
+          // Whole week exclusion
+          excludedOperatorsMap[op.operatorId] = null;
+        } else {
+          // Day-specific exclusion
+          excludedOperatorsMap[op.operatorId] = op.excludedDays;
+        }
+      });
+    }
+
+    // Run the fill gaps algorithm to generate preview
+    // Only consider tasks that have Task Requirements configured (Task Staffing settings)
+    const configuredTasks = tasks.filter(t => taskRequirements.some(r => r.taskId === t.id));
+
+    // Log which tasks are being considered
+    console.log('[Fill Gaps] Using only configured tasks:', configuredTasks.map(t => t.name));
+    console.log('[Fill Gaps] Skipping tasks without requirements:',
+      tasks.filter(t => !taskRequirements.some(r => r.taskId === t.id)).map(t => t.name)
+    );
+
+    if (configuredTasks.length === 0) {
+      addToast({
+        type: 'warning',
+        title: 'No Task Requirements',
+        message: 'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
+        duration: 6000,
+      });
+      return;
+    }
+
+    const result = fillGapsSchedule({
+      schedule: currentWeek,
+      operators,
+      tasks: configuredTasks,
+      rules: schedulingRules,
+      excludedOperators: excludedOperatorsMap,
+      fillGapsSettings,
+    });
+
+    setFillGapsResult(result);
+    setShowFillGapsPreview(true);
+  };
+
+  // Apply the fill gaps assignments to the schedule
+  const handleApplyFillGaps = () => {
+    if (!fillGapsResult) return;
+
+    const newSchedule = { ...currentWeek };
+    let appliedCount = 0;
+
+    fillGapsResult.assignments.forEach(assignment => {
+      const dayIndex = assignment.dayIndex;
+      if (newSchedule.days[dayIndex]) {
+        newSchedule.days[dayIndex].assignments[assignment.operatorId] = {
+          taskId: assignment.taskId,
+          locked: false,
+          pinned: false,
+        };
+        appliedCount++;
+      }
+    });
+
+    setCurrentWeek(newSchedule);
+    setShowFillGapsPreview(false);
+    setFillGapsResult(null);
+
+    // Show toast notification
+    if (appliedCount > 0) {
+      toast.success(
+        'Gaps Filled Successfully',
+        `${appliedCount} gap${appliedCount > 1 ? 's' : ''} filled in the schedule`
+      );
+    }
+  };
+
   // Handle applying the planning modal configuration and running smart fill
-  const handlePlanApply = (plan: WeeklyStaffingPlan) => {
+  const handlePlanApply = (config: WeeklyPlanningConfig, exclusions?: WeeklyExclusions) => {
     setIsGenerating(true);
+
+    // Store config for this week so it persists when modal reopens
+    const weekKey = `${config.year}-W${config.weekNumber}`;
+    setWeeklyPlanningConfigs(prev => ({
+      ...prev,
+      [weekKey]: config
+    }));
+
+    // Store exclusions for this week (or clear if undefined/empty)
+    if (exclusions && exclusions.exclusions.length > 0) {
+      setWeeklyExclusions(prev => ({
+        ...prev,
+        [weekKey]: exclusions
+      }));
+      // Save to storage
+      saveWeeklyExclusions(exclusions);
+    } else {
+      // Clear exclusions for this week if all operators were removed from leave
+      setWeeklyExclusions(prev => {
+        const newState = { ...prev };
+        delete newState[weekKey];
+        return newState;
+      });
+      // Delete from storage if there was an existing exclusion
+      const existingId = weeklyExclusions[weekKey]?.id;
+      if (existingId) {
+        deleteWeeklyExclusions(existingId);
+      }
+    }
+
+    // Update excluded tasks state for validation
+    setExcludedTasks(config.excludedTasks || []);
+
     try {
       const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
-      // Convert WeeklyStaffingPlan to TaskRequirement format for the algorithm
-      // The algorithm needs TaskRequirement[], so we convert from the planning modal format
-      const planTaskRequirements: TaskRequirement[] = plan.requirements.map(req => {
-        // For now, use the first alternative as the primary requirement
-        // The algorithm will use this to guide assignments
-        const primaryConfig = req.alternatives[0];
-        return {
-          taskId: req.taskId,
-          defaultRequirements: primaryConfig?.requirements || [{ type: 'Any' as const, count: 1 }],
-          enabled: req.enabled,
+      // Convert WeeklyPlanningConfig rules to TaskRequirement format for the algorithm
+      // The new rules are skill-based, so we need to map skills to tasks
+      const numericRules = config.rules.filter((r): r is NumericStaffingRule => r.type === 'numeric' && r.enabled);
+
+      // Build task requirements by MERGING Plan Builder rules with existing Staffing Requirements
+      // Start with a deep copy of existing taskRequirements so day-specific Plan Builder rules
+      // override only that day while other days still use Staffing Requirements defaults
+      const planTaskRequirements: TaskRequirement[] = taskRequirements.map(tr => ({
+        taskId: tr.taskId,
+        defaultRequirements: tr.defaultRequirements.map(r => ({ ...r })),
+        dailyOverrides: tr.dailyOverrides ? Object.fromEntries(
+          Object.entries(tr.dailyOverrides).map(([day, reqs]) => [day, reqs?.map(r => ({ ...r }))])
+        ) as Partial<Record<WeekDay, OperatorTypeRequirement[]>> : {},
+        enabled: tr.enabled,
+      }));
+
+      console.log(`[Plan Builder] Starting with ${planTaskRequirements.length} existing Staffing Requirements`);
+
+      // Helper to add requirement to a task (either defaultRequirements or dailyOverrides)
+      const addRequirementToTask = (
+        taskId: string,
+        reqType: 'Regular' | 'Flex',
+        count: number,
+        timeframe: typeof daysList[number] | 'every-day'
+      ) => {
+        let existingReq = planTaskRequirements.find(r => r.taskId === taskId);
+
+        if (!existingReq) {
+          // Create new TaskRequirement entry (task not in Staffing Requirements)
+          existingReq = {
+            taskId,
+            defaultRequirements: [],
+            dailyOverrides: {},
+            enabled: true,
+          };
+          planTaskRequirements.push(existingReq);
+        }
+
+        const reqEntry: OperatorTypeRequirement = {
+          type: reqType,
+          count: count
         };
+
+        if (timeframe === 'every-day') {
+          // Add to default requirements (applies to all days)
+          // This REPLACES the Staffing Requirements default for this type
+          const existingTypeReq = existingReq.defaultRequirements.find(r => r.type === reqType);
+          if (existingTypeReq) {
+            // Plan Builder rules OVERRIDE existing requirements (not max)
+            existingTypeReq.count = count;
+          } else {
+            existingReq.defaultRequirements.push(reqEntry);
+          }
+          console.log(`[Plan Builder] Set default requirement: ${count}x ${reqType} (every day)`);
+        } else {
+          // Add to day-specific override
+          // Other days will still use defaultRequirements from Staffing Requirements
+          const day = timeframe as WeekDay;
+          if (!existingReq.dailyOverrides) {
+            existingReq.dailyOverrides = {};
+          }
+          if (!existingReq.dailyOverrides[day]) {
+            existingReq.dailyOverrides[day] = [];
+          }
+          const existingDayReq = existingReq.dailyOverrides[day]!.find(r => r.type === reqType);
+          if (existingDayReq) {
+            // Plan Builder rules OVERRIDE existing requirements (not max)
+            existingDayReq.count = count;
+          } else {
+            existingReq.dailyOverrides[day]!.push(reqEntry);
+          }
+          console.log(`[Plan Builder] Added daily override: ${count}x ${reqType} on ${day} (other days use Staffing Requirements: ${existingReq.defaultRequirements.map(r => `${r.count}x ${r.type}`).join(', ') || 'none'})`);
+        }
+      };
+
+      numericRules.forEach(rule => {
+        const { timeframe } = rule;
+        console.log(`[Plan Builder] Processing rule with timeframe: ${timeframe}`);
+
+        rule.requirements.forEach(req => {
+          // Priority 1: Check if skill exactly matches a task NAME
+          // This ensures "Troubleshooter AD" skill maps to only the Troubleshooter AD task
+          // even if another task's requiredSkill is "Troubleshooter"
+          const exactNameMatch = tasks.find(t => t.name === req.skill);
+          let matchingTasks: typeof tasks = [];
+
+          if (exactNameMatch) {
+            // Exact task name match - use ONLY this task
+            matchingTasks = [exactNameMatch];
+            console.log(`[Plan Builder] Skill "${req.skill}" -> Exact task name match: ${exactNameMatch.name}`);
+          } else {
+            // Priority 2: Match by requiredSkill
+            matchingTasks = tasks.filter(t => t.requiredSkill === req.skill);
+
+            // If multiple tasks match, that's intentional (skill applies to all those tasks)
+            if (matchingTasks.length > 0) {
+              console.log(`[Plan Builder] Skill "${req.skill}" -> Matched by requiredSkill`);
+            }
+          }
+
+          console.log(`[Plan Builder] Skill "${req.skill}" -> Found ${matchingTasks.length} matching tasks:`, matchingTasks.map(t => t.name));
+          matchingTasks.forEach(task => {
+            addRequirementToTask(task.id, req.operatorType, req.count, timeframe);
+            console.log(`[Plan Builder] Created/Updated requirement for task "${task.name}": ${req.count} ${req.operatorType} operators (${timeframe})`);
+          });
+        });
+      });
+
+      // =========================================================================
+      // Process PAIRING RULES - "I want X and Y together on Skill"
+      // These rules RESERVE operators for specific tasks by pre-pinning them
+      // =========================================================================
+      const pairingRules = config.rules.filter((r): r is OperatorPairingRule => r.type === 'pairing' && r.enabled);
+      const reservedAssignments: Record<string, Record<string, { taskId: string; pinned: boolean }>> = {}; // dayIndex -> operatorId -> assignment
+
+      pairingRules.forEach(rule => {
+        if (rule.preference !== 'want') return; // Only process "want" rules for reservations
+
+        // Find the task that matches the skill
+        // Priority 1: Exact task name match
+        let matchingTask = tasks.find(t => t.name === rule.skill);
+        // Priority 2: Match by requiredSkill
+        if (!matchingTask) {
+          matchingTask = tasks.find(t => t.requiredSkill === rule.skill);
+        }
+
+        if (!matchingTask) {
+          console.log(`[Plan Builder] Pairing rule: No task found for skill "${rule.skill}"`);
+          return;
+        }
+
+        // Determine which days this rule applies to
+        let ruleDays: WeekDay[] = [];
+        if (rule.selectedDays && rule.selectedDays.length > 0) {
+          ruleDays = rule.selectedDays;
+        } else if (rule.timeframe === 'every-day') {
+          ruleDays = daysList;
+        } else {
+          ruleDays = [rule.timeframe as WeekDay];
+        }
+
+        console.log(`[Plan Builder] Pairing rule: Reserving ${rule.operatorIds.length} operators for "${matchingTask.name}" on ${ruleDays.join(', ')}`);
+
+        // Reserve each operator for this task on the specified days
+        rule.operatorIds.forEach(opId => {
+          const op = operators.find(o => o.id === opId);
+          if (!op) return;
+
+          ruleDays.forEach(day => {
+            const dayIndex = daysList.indexOf(day);
+            if (dayIndex === -1) return;
+
+            // Check operator availability
+            if (!op.availability[day]) {
+              console.log(`[Plan Builder] Skipping ${op.name} on ${day} - not available`);
+              return;
+            }
+
+            if (!reservedAssignments[dayIndex]) {
+              reservedAssignments[dayIndex] = {};
+            }
+
+            // Only reserve if not already reserved by another rule
+            if (!reservedAssignments[dayIndex][opId]) {
+              reservedAssignments[dayIndex][opId] = {
+                taskId: matchingTask!.id,
+                pinned: true // Mark as pinned so Smart Fill respects it
+              };
+              console.log(`[Plan Builder] Reserved ${op.name} for "${matchingTask!.name}" on ${day}`);
+            }
+          });
+        });
       });
 
       // Build current assignments map for the algorithm (include pinned field)
+      // MERGE reserved assignments from pairing rules with existing assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
       currentWeek.days.forEach((day, idx) => {
-        currentAssignmentsMap[idx] = day.assignments;
+        currentAssignmentsMap[idx] = { ...day.assignments };
+
+        // Apply reserved assignments from pairing rules
+        // These override non-locked existing assignments
+        if (reservedAssignments[idx]) {
+          Object.entries(reservedAssignments[idx]).forEach(([opId, reserved]) => {
+            const existing = currentAssignmentsMap[idx][opId];
+            // Only apply if not already locked
+            if (!existing?.locked) {
+              currentAssignmentsMap[idx][opId] = {
+                taskId: reserved.taskId,
+                locked: false,
+                pinned: true // Pinned so Smart Fill respects it
+              };
+            }
+          });
+        }
       });
 
+      console.log(`[Plan Builder] Final task requirements (${planTaskRequirements.length} total):`, JSON.stringify(planTaskRequirements, null, 2));
+
+      // NOTE: We do NOT save planTaskRequirements to state!
+      // The Plan Builder creates TEMPORARY requirements for this week's schedule only.
+      // Permanent Task Staffing Requirements should only be modified in Settings > Staffing Requirements.
+      // The planTaskRequirements are used only for schedule generation below.
+
       // Run smart fill with the plan's requirements
-      const result = generateSmartSchedule({
+      const scheduleResult = generateOptimizedSchedule({
         operators,
         tasks,
         days: daysList,
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
-        taskRequirements: planTaskRequirements.length > 0 ? planTaskRequirements : taskRequirements
+        taskRequirements: planTaskRequirements.length > 0 ? planTaskRequirements : taskRequirements,
+        excludedTasks: config.excludedTasks || []
       });
+
+      // Handle both single schedule and multi-objective array results
+      const result = Array.isArray(scheduleResult) ? scheduleResult[0].schedule : scheduleResult;
 
       if (result && result.assignments) {
         const newSchedule = { ...currentWeek };
         let assignmentCount = 0;
 
-        // First, clear assignments for operators on days they're NOT available
+        // First, clear ALL non-locked/non-pinned assignments before applying new ones
+        // This ensures stale assignments don't persist when Plan Builder limits change
         daysList.forEach((day, dayIndex) => {
           operators.forEach(op => {
             const existingAssignment = newSchedule.days[dayIndex]?.assignments[op.id];
-            if (!op.availability[day] && existingAssignment && existingAssignment.taskId) {
+            if (existingAssignment && existingAssignment.taskId) {
               if (!existingAssignment.locked && !existingAssignment.pinned) {
                 newSchedule.days[dayIndex].assignments[op.id] = {
                   taskId: null,
@@ -1019,8 +2068,8 @@ function App() {
     newSchedule.days.forEach(day => {
       Object.keys(day.assignments).forEach(opId => {
         const assignment = day.assignments[opId];
-        // Only clear if not locked
-        if (!assignment.locked && assignment.taskId) {
+        // Clear ALL assignments including locked/pinned ones
+        if (assignment.taskId) {
           day.assignments[opId] = {
             taskId: null,
             locked: false,
@@ -1035,11 +2084,78 @@ function App() {
     setScheduleWarnings([]);
 
     if (clearedCount > 0) {
-      toast.success('Schedule Cleared', `${clearedCount} assignment${clearedCount > 1 ? 's' : ''} removed`);
+      toast.success('Schedule Cleared', `${clearedCount} assignment${clearedCount > 1 ? 's' : ''} removed (including locked cells)`);
     } else {
       toast.info('Nothing to Clear', 'No assignments to remove');
     }
   };
+
+  // Get appropriate portal container for modals (handles fullscreen mode)
+  const getModalPortalContainer = useCallback((): HTMLElement => {
+    const fullscreenElement =
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement;
+    return (fullscreenElement as HTMLElement) || document.body;
+  }, []);
+
+  // Fullscreen handlers
+  const handleToggleFullscreen = () => {
+    const gridElement = scheduleGridRef.current;
+    if (!gridElement) return;
+
+    if (!isFullscreen) {
+      // Enter fullscreen
+      if (gridElement.requestFullscreen) {
+        gridElement.requestFullscreen();
+      } else if ((gridElement as any).webkitRequestFullscreen) {
+        (gridElement as any).webkitRequestFullscreen();
+      } else if ((gridElement as any).mozRequestFullScreen) {
+        (gridElement as any).mozRequestFullScreen();
+      } else if ((gridElement as any).msRequestFullscreen) {
+        (gridElement as any).msRequestFullscreen();
+      }
+      setIsFullscreen(true);
+    } else {
+      // Exit fullscreen
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      } else if ((document as any).mozCancelFullScreen) {
+        (document as any).mozCancelFullScreen();
+      } else if ((document as any).msExitFullscreen) {
+        (document as any).msExitFullscreen();
+      }
+      setIsFullscreen(false);
+    }
+  };
+
+  // Listen for fullscreen change events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+      );
+      setIsFullscreen(isCurrentlyFullscreen);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
 
   // --- Render Helpers ---
 
@@ -1071,6 +2187,31 @@ function App() {
     return tasks.find(t => t.id === taskId)?.name || '';
   };
 
+  // Check if an assignment matches the schedule search filter
+  // Only matches by ASSIGNED TASK name or required skill - NOT operator skills
+  const doesAssignmentMatchFilter = (taskId: string | null, operator: Operator): boolean => {
+    if (!scheduleSearchFilter.trim()) return true; // No filter = show everything
+
+    const query = scheduleSearchFilter.toLowerCase().trim();
+
+    // Only check if the ASSIGNED task matches the filter
+    // Don't check operator skills - we want to highlight the actual assignments, not all cells of operators who have that skill
+    if (taskId) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task?.name.toLowerCase().includes(query)) return true;
+      if (task?.requiredSkill.toLowerCase().includes(query)) return true;
+    }
+
+    // Empty cells should not match any filter
+    return false;
+  };
+
+  // Check if an operator row should be visible based on filter
+  // Always show ALL operators - only the pills fade based on filter match
+  const shouldShowOperatorRow = (operator: Operator, days: typeof currentWeek.days): boolean => {
+    return true; // Always show all operators - pills will fade based on filter
+  };
+
   // Helper to check if a cell has a warning
   const getCellWarnings = (operatorId: string, dayIndex: number): ScheduleWarning[] => {
     const dayName = (['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as WeekDay[])[dayIndex];
@@ -1079,6 +2220,182 @@ function App() {
       (w.day === dayName && !w.operatorId && w.type === 'understaffed')
     );
   };
+
+  // Check if a specific cell has a Plan Builder violation
+  const getCellPlanBuilderViolation = (operatorId: string, dayIndex: number): PlanBuilderViolation | null => {
+    const dayName = (['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as WeekDay[])[dayIndex];
+    const day = currentWeek.days[dayIndex];
+    if (!day) return null;
+
+    const assignment = day.assignments[operatorId];
+    if (!assignment || !assignment.taskId) return null;
+
+    // Find if this cell's task is part of any violation on this day
+    return planBuilderViolations.find(
+      v => v.taskId === assignment.taskId && v.day === dayName
+    ) || null;
+  };
+
+  // Get warning severity level (Critical > Warning > Info)
+  const getWarningSeverity = (type: ScheduleWarning['type']): 'critical' | 'warning' | 'info' => {
+    switch (type) {
+      case 'skill_mismatch':
+      case 'double_assignment':
+        return 'critical';
+      case 'availability_conflict':
+      case 'understaffed':
+      case 'overstaffed':
+        return 'warning';
+      default:
+        return 'info';
+    }
+  };
+
+  // Get icon component for each warning type
+  const getWarningIcon = (type: ScheduleWarning['type']) => {
+    switch (type) {
+      case 'skill_mismatch':
+        return UserX;
+      case 'double_assignment':
+        return Repeat;
+      case 'availability_conflict':
+        return CalendarX2;
+      case 'understaffed':
+        return UserPlus;
+      case 'overstaffed':
+        return UserMinus;
+      default:
+        return AlertTriangle;
+    }
+  };
+
+  // Get friendly label for warning type
+  const getWarningLabel = (type: ScheduleWarning['type']): string => {
+    switch (type) {
+      case 'skill_mismatch': return 'Skill Mismatch';
+      case 'double_assignment': return 'Double Assignment';
+      case 'understaffed': return 'Understaffed';
+      case 'overstaffed': return 'Overstaffed';
+      case 'availability_conflict': return 'Availability Conflict';
+      case 'consecutive_heavy': return 'Consecutive Heavy Task';
+      default: return type;
+    }
+  };
+
+  // Compute critical warnings count (skill mismatches and double assignments)
+  const criticalWarnings = useMemo(() =>
+    scheduleWarnings.filter(w => getWarningSeverity(w.type) === 'critical'),
+    [scheduleWarnings]
+  );
+  const hasCriticalWarnings = criticalWarnings.length > 0;
+
+  // Scroll to a specific cell in the schedule grid
+  const scrollToWarningCell = (warning: ScheduleWarning) => {
+    if (!warning.operatorId || !warning.day) return;
+
+    const dayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(warning.day);
+    if (dayIndex === -1) return;
+
+    // Find the cell by data attributes
+    const cellSelector = `[data-operator-id="${warning.operatorId}"][data-day-index="${dayIndex}"]`;
+    const cell = document.querySelector(cellSelector);
+
+    if (cell) {
+      cell.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      // Flash highlight effect
+      cell.classList.add('ring-2', 'ring-amber-400', 'ring-offset-2');
+      setTimeout(() => {
+        cell.classList.remove('ring-2', 'ring-amber-400', 'ring-offset-2');
+      }, 2000);
+    }
+  };
+
+  // Quick-fix action handler for warnings
+  const handleQuickFix = useCallback((warning: ScheduleWarning, action: 'remove' | 'navigate') => {
+    const dayOrder = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const dayIndex = warning.day ? dayOrder.indexOf(warning.day) : -1;
+
+    if (action === 'navigate') {
+      scrollToWarningCell(warning);
+      return;
+    }
+
+    if (action === 'remove' && warning.operatorId && dayIndex >= 0) {
+      // Remove the assignment
+      handleAssignmentChange(dayIndex, warning.operatorId, null);
+      toast.success('Assignment removed');
+    }
+  }, [handleAssignmentChange, toast]);
+
+  // Check if a warning can be quick-fixed
+  const canQuickFix = (warning: ScheduleWarning): boolean => {
+    return (warning.type === 'skill_mismatch' || warning.type === 'double_assignment')
+      && !!warning.operatorId && !!warning.day;
+  };
+
+  // Filter warnings based on selected filter
+  const filteredWarnings = useMemo(() => {
+    if (warningsFilter === 'all') return scheduleWarnings;
+    return scheduleWarnings.filter(w => w.type === warningsFilter);
+  }, [scheduleWarnings, warningsFilter]);
+
+  // Group warnings by day for better organization
+  const warningsGroupedByDay = useMemo(() => {
+    const grouped: Record<string, ScheduleWarning[]> = {};
+    const dayOrder = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+    // Initialize all days
+    dayOrder.forEach(day => {
+      grouped[day] = [];
+    });
+    grouped['General'] = []; // For warnings without a specific day
+
+    filteredWarnings.forEach(warning => {
+      if (warning.day && dayOrder.includes(warning.day)) {
+        grouped[warning.day].push(warning);
+      } else {
+        grouped['General'].push(warning);
+      }
+    });
+
+    // Return only non-empty groups in order
+    const result: { day: string; dayLabel: string; warnings: ScheduleWarning[] }[] = [];
+    dayOrder.forEach(day => {
+      if (grouped[day].length > 0) {
+        const fullDayNames: Record<string, string> = {
+          'Mon': 'Monday',
+          'Tue': 'Tuesday',
+          'Wed': 'Wednesday',
+          'Thu': 'Thursday',
+          'Fri': 'Friday'
+        };
+        result.push({ day, dayLabel: fullDayNames[day], warnings: grouped[day] });
+      }
+    });
+    if (grouped['General'].length > 0) {
+      result.push({ day: 'General', dayLabel: 'General Issues', warnings: grouped['General'] });
+    }
+
+    return result;
+  }, [filteredWarnings]);
+
+  // Group warnings by severity for summary
+  const warningsSummary = useMemo(() => {
+    const summary = {
+      critical: 0,
+      warning: 0,
+      info: 0,
+      byType: {} as Record<ScheduleWarning['type'], number>
+    };
+
+    scheduleWarnings.forEach(w => {
+      const severity = getWarningSeverity(w.type);
+      summary[severity]++;
+      summary.byType[w.type] = (summary.byType[w.type] || 0) + 1;
+    });
+
+    return summary;
+  }, [scheduleWarnings]);
 
   // --- Components ---
 
@@ -1740,212 +3057,250 @@ function App() {
              </p>
            </div>
          ) : teamViewMode === 'cards' ? (
-           /* CARD VIEW */
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredOperators.map((op) => (
-              <div key={op.id} className={`group relative flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl overflow-hidden ${styles.card} ${op.archived ? 'opacity-75' : ''}`}>
-                 {/* Top Status Bar */}
-                 <div className={`h-1.5 w-full ${op.archived ? 'bg-gray-400' : op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`} />
-                 {/* Archived Badge */}
-                 {op.archived && (
-                   <div className={`absolute top-3 right-3 px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                     theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
-                   }`}>
-                     Archived
-                   </div>
-                 )}
+           /* CARD VIEW - Grouped by Type */
+           <div className="space-y-8">
+            {(() => {
+              // Group operators by type
+              const cevaOps = filteredOperators.filter(op => op.type === 'Regular');
+              const flexOps = filteredOperators.filter(op => op.type === 'Flex');
+              const tcOps = filteredOperators.filter(op => op.type === 'Coordinator');
 
-                 <div className="p-5 flex-1 flex flex-col">
-                    {/* Header */}
-                    <div className="flex justify-between items-start mb-4">
-                       <div className="flex items-center gap-3">
-                          <div className={`relative h-14 w-14 rounded-2xl flex items-center justify-center text-xl font-bold shadow-sm ${
-                            theme === 'Midnight' ? 'bg-slate-800 text-white border border-slate-700' : 'bg-white border border-gray-100 text-gray-700 shadow-inner'
-                          }`}>
-                             {op.name.charAt(0)}
-                             {/* Status Dot */}
-                             <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 ${theme === 'Midnight' ? 'border-slate-900' : 'border-white'} ${op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`}></div>
-                          </div>
-                          <div>
-                             <h3 className={`font-bold text-lg leading-tight ${styles.text}`}>{op.name}</h3>
-                             <p className={`text-xs font-medium uppercase tracking-wide mt-1 ${op.type === 'Coordinator' ? 'text-emerald-500' : op.type === 'Flex' ? 'text-purple-500' : styles.muted}`}>
-                               {op.type}
-                             </p>
-                          </div>
-                       </div>
-                       <div className="relative">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenOperatorMenu(openOperatorMenu === op.id ? null : op.id);
-                            }}
-                            title="More actions"
-                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'Midnight' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-400'}`}
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                          {/* Dropdown Menu */}
-                          {openOperatorMenu === op.id && (
-                            <div
-                              className={`absolute right-0 top-full mt-1 w-44 z-50 rounded-xl shadow-xl border overflow-hidden ${
-                                theme === 'Midnight'
-                                  ? 'bg-slate-900 border-slate-700'
-                                  : 'bg-white border-gray-200'
-                              }`}
-                              onClick={(e) => e.stopPropagation()}
+              // Render a single operator card
+              const renderCard = (op: Operator) => (
+                <div key={op.id} className={`group relative flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl overflow-hidden ${styles.card} ${op.archived ? 'opacity-75' : ''}`}>
+                   {/* Top Status Bar */}
+                   <div className={`h-1.5 w-full ${op.archived ? 'bg-gray-400' : op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                   {/* Archived Badge */}
+                   {op.archived && (
+                     <div className={`absolute top-3 right-3 px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                       theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                     }`}>
+                       Archived
+                     </div>
+                   )}
+
+                   <div className="p-5 flex-1 flex flex-col">
+                      {/* Header */}
+                      <div className="flex justify-between items-start mb-4">
+                         <div className="flex items-center gap-3">
+                            <div className={`relative h-14 w-14 rounded-2xl flex items-center justify-center text-xl font-bold shadow-sm ${
+                              theme === 'Midnight' ? 'bg-slate-800 text-white border border-slate-700' : 'bg-white border border-gray-100 text-gray-700 shadow-inner'
+                            }`}>
+                               {op.name.charAt(0)}
+                               {/* Status Dot */}
+                               <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 ${theme === 'Midnight' ? 'border-slate-900' : 'border-white'} ${op.status === 'Active' ? 'bg-emerald-500' : op.status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'}`}></div>
+                            </div>
+                            <div>
+                               <h3 className={`font-bold text-lg leading-tight ${styles.text}`}>{op.name}</h3>
+                               <p className={`text-xs font-medium uppercase tracking-wide mt-1 ${op.type === 'Coordinator' ? 'text-emerald-500' : op.type === 'Flex' ? 'text-purple-500' : styles.muted}`}>
+                                 {op.type === 'Regular' ? 'Ceva' : op.type === 'Coordinator' ? 'TC' : op.type}
+                               </p>
+                            </div>
+                         </div>
+                         <div className="relative">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenOperatorMenu(openOperatorMenu === op.id ? null : op.id);
+                              }}
+                              title="More actions"
+                              className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'Midnight' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-400'}`}
                             >
-                              <button
-                                onClick={() => {
-                                  setEditingOperator(op);
-                                  setIsOperatorModalOpen(true);
-                                  setOpenOperatorMenu(null);
-                                }}
-                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+                            {/* Dropdown Menu */}
+                            {openOperatorMenu === op.id && (
+                              <div
+                                className={`absolute right-0 top-full mt-1 w-44 z-50 rounded-xl shadow-xl border overflow-hidden ${
                                   theme === 'Midnight'
-                                    ? 'text-slate-300 hover:bg-slate-800'
-                                    : 'text-gray-700 hover:bg-gray-50'
+                                    ? 'bg-slate-900 border-slate-700'
+                                    : 'bg-white border-gray-200'
                                 }`}
+                                onClick={(e) => e.stopPropagation()}
                               >
-                                <Edit2 className="h-4 w-4" />
-                                Edit Profile
-                              </button>
-                              <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
-                                <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
-                                  Set Status
-                                </div>
-                                {(['Active', 'Sick', 'Leave'] as const).map(status => (
-                                  <button
-                                    key={status}
-                                    onClick={() => {
-                                      setOperators(prev => prev.map(o =>
-                                        o.id === op.id ? { ...o, status } : o
-                                      ));
-                                      setOpenOperatorMenu(null);
-                                    }}
-                                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                                      theme === 'Midnight'
-                                        ? 'text-slate-300 hover:bg-slate-800'
-                                        : 'text-gray-700 hover:bg-gray-50'
-                                    }`}
-                                  >
-                                    <div className={`w-2 h-2 rounded-full ${
-                                      status === 'Active' ? 'bg-emerald-500' :
-                                      status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
-                                    }`} />
-                                    {status}
-                                    {op.status === status && (
-                                      <Check className="h-3 w-3 ml-auto text-emerald-500" />
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                              <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
-                                {op.archived ? (
-                                  <>
+                                <button
+                                  onClick={() => {
+                                    setEditingOperator(op);
+                                    setIsOperatorModalOpen(true);
+                                    setOpenOperatorMenu(null);
+                                  }}
+                                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                    theme === 'Midnight'
+                                      ? 'text-slate-300 hover:bg-slate-800'
+                                      : 'text-gray-700 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                  Edit Profile
+                                </button>
+                                <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                  <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                                    Set Status
+                                  </div>
+                                  {(['Active', 'Sick', 'Leave'] as const).map(status => (
                                     <button
+                                      key={status}
                                       onClick={() => {
-                                        handleRestoreOperator(op.id);
+                                        setOperators(prev => prev.map(o =>
+                                          o.id === op.id ? { ...o, status } : o
+                                        ));
                                         setOpenOperatorMenu(null);
                                       }}
-                                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
                                         theme === 'Midnight'
-                                          ? 'text-emerald-400 hover:bg-emerald-500/10'
-                                          : 'text-emerald-600 hover:bg-emerald-50'
+                                          ? 'text-slate-300 hover:bg-slate-800'
+                                          : 'text-gray-700 hover:bg-gray-50'
                                       }`}
                                     >
-                                      <UserCheck className="h-4 w-4" />
-                                      Restore Operator
+                                      <div className={`w-2 h-2 rounded-full ${
+                                        status === 'Active' ? 'bg-emerald-500' :
+                                        status === 'Sick' ? 'bg-red-500' : 'bg-amber-500'
+                                      }`} />
+                                      {status}
+                                      {op.status === status && (
+                                        <Check className="h-3 w-3 ml-auto text-emerald-500" />
+                                      )}
                                     </button>
+                                  ))}
+                                </div>
+                                <div className={`border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`}>
+                                  {op.archived ? (
+                                    <>
+                                      <button
+                                        onClick={() => {
+                                          handleRestoreOperator(op.id);
+                                          setOpenOperatorMenu(null);
+                                        }}
+                                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                          theme === 'Midnight'
+                                            ? 'text-emerald-400 hover:bg-emerald-500/10'
+                                            : 'text-emerald-600 hover:bg-emerald-50'
+                                        }`}
+                                      >
+                                        <UserCheck className="h-4 w-4" />
+                                        Restore Operator
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          handlePermanentDelete(op.id);
+                                          setOpenOperatorMenu(null);
+                                        }}
+                                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                                          theme === 'Midnight'
+                                            ? 'text-red-400 hover:bg-red-500/10'
+                                            : 'text-red-600 hover:bg-red-50'
+                                        }`}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                        Delete Permanently
+                                      </button>
+                                    </>
+                                  ) : (
                                     <button
                                       onClick={() => {
-                                        handlePermanentDelete(op.id);
+                                        handleArchiveOperator(op.id);
                                         setOpenOperatorMenu(null);
                                       }}
                                       className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                                         theme === 'Midnight'
-                                          ? 'text-red-400 hover:bg-red-500/10'
-                                          : 'text-red-600 hover:bg-red-50'
+                                          ? 'text-amber-400 hover:bg-amber-500/10'
+                                          : 'text-amber-600 hover:bg-amber-50'
                                       }`}
                                     >
                                       <Trash2 className="h-4 w-4" />
-                                      Delete Permanently
+                                      Archive Operator
                                     </button>
-                                  </>
-                                ) : (
-                                  <button
-                                    onClick={() => {
-                                      handleArchiveOperator(op.id);
-                                      setOpenOperatorMenu(null);
-                                    }}
-                                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-                                      theme === 'Midnight'
-                                        ? 'text-amber-400 hover:bg-amber-500/10'
-                                        : 'text-amber-600 hover:bg-amber-50'
-                                    }`}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                    Archive Operator
-                                  </button>
-                                )}
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          )}
-                       </div>
-                    </div>
+                            )}
+                         </div>
+                      </div>
 
-                    {/* Quick Availability Viz */}
-                    <div className="mb-4">
-                       <div className="flex justify-between items-center mb-1">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Availability</span>
-                       </div>
-                       <div className="flex gap-1">
-                          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((d) => {
-                             const isAvailable = op.availability && op.availability[d as WeekDay];
-                             return (
-                             <div key={d} className={`h-1.5 flex-1 rounded-full ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-100'}`}>
-                                <div className={`h-full rounded-full ${isAvailable ? 'bg-emerald-500' : 'bg-red-400'}`} style={{ width: '100%' }}></div>
-                             </div>
-                          )})}
-                       </div>
-                    </div>
+                      {/* Quick Availability Viz */}
+                      <div className="mb-4">
+                         <div className="flex justify-between items-center mb-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Availability</span>
+                         </div>
+                         <div className="flex gap-1">
+                            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((d) => {
+                               const isAvailable = op.availability && op.availability[d as WeekDay];
+                               return (
+                               <div key={d} className={`h-1.5 flex-1 rounded-full ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-100'}`}>
+                                  <div className={`h-full rounded-full ${isAvailable ? 'bg-emerald-500' : 'bg-red-400'}`} style={{ width: '100%' }}></div>
+                               </div>
+                            )})}
+                         </div>
+                      </div>
 
-                    {/* Skills Tags */}
-                    <div className="flex-1 content-start">
-                       <div className="flex flex-wrap gap-1.5">
-                          {op.skills.slice(0, 5).map(skill => (
-                             <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md border ${
-                               theme === 'Midnight'
-                                 ? 'bg-slate-900 border-slate-700 text-slate-400'
-                                 : 'bg-white border-gray-200 text-gray-600'
-                             }`}>
-                                {skill}
-                             </span>
-                          ))}
-                          {op.skills.length > 5 && (
-                             <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-500'}`}>
-                               +{op.skills.length - 5}
-                             </span>
-                          )}
-                       </div>
-                    </div>
-                 </div>
+                      {/* Skills Tags */}
+                      <div className="flex-1 content-start">
+                         <div className="flex flex-wrap gap-1.5">
+                            {op.skills.slice(0, 5).map(skill => (
+                               <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md border ${
+                                 theme === 'Midnight'
+                                   ? 'bg-slate-900 border-slate-700 text-slate-400'
+                                   : 'bg-white border-gray-200 text-gray-600'
+                               }`}>
+                                  {skill}
+                               </span>
+                            ))}
+                            {op.skills.length > 5 && (
+                               <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-500'}`}>
+                                 +{op.skills.length - 5}
+                               </span>
+                            )}
+                         </div>
+                      </div>
+                   </div>
 
-                 {/* Footer */}
-                 <div className={`px-5 py-3 border-t flex items-center justify-between ${styles.cardHeader}`}>
-                    <span className={`text-xs font-medium ${styles.muted}`}>ID: #{op.id.substring(0,4)}</span>
-                    <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
-                       {op.skills.length} skill{op.skills.length !== 1 ? 's' : ''}
-                    </span>
-                 </div>
-              </div>
-            ))}
+                   {/* Footer */}
+                   <div className={`px-5 py-3 border-t flex items-center justify-between ${styles.cardHeader}`}>
+                      <span className={`text-xs font-medium ${styles.muted}`}>ID: #{op.id.substring(0,4)}</span>
+                      <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+                         {op.skills.length} skill{op.skills.length !== 1 ? 's' : ''}
+                      </span>
+                   </div>
+                </div>
+              );
+
+              // Render section with header
+              const renderSection = (title: string, ops: Operator[], color: string) => {
+                if (ops.length === 0) return null;
+                return (
+                  <div key={title}>
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className={`h-1 w-8 rounded-full ${color}`} />
+                      <h3 className={`text-sm font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'}`}>
+                        {title}
+                      </h3>
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-gray-500'}`}>
+                        {ops.length}
+                      </span>
+                      <div className={`h-0.5 flex-1 rounded-full ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-200'}`} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                      {ops.map(renderCard)}
+                    </div>
+                  </div>
+                );
+              };
+
+              return (
+                <>
+                  {renderSection('Ceva Operators', cevaOps, 'bg-blue-500')}
+                  {renderSection('Flex Operators', flexOps, 'bg-purple-500')}
+                  {renderSection('Team Coordinators', tcOps, 'bg-emerald-500')}
+                </>
+              );
+            })()}
            </div>
          ) : teamViewMode === 'table' ? (
            /* TABLE VIEW */
            <div className={`overflow-hidden ${styles.card}`}>
-             <div className="overflow-x-auto">
+             <div className="overflow-auto max-h-[calc(100vh-320px)]">
                <table className="w-full">
-                 <thead>
+                 <thead className={`sticky top-0 z-10 ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-white'}`}>
                    <tr className={theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'}>
                      <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Name</th>
                      <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider ${styles.muted}`}>Type</th>
@@ -2125,16 +3480,16 @@ function App() {
          ) : (
            /* SKILLS MATRIX VIEW */
            <div className={`overflow-hidden ${styles.card}`}>
-             <div className="overflow-x-auto">
+             <div className="overflow-auto max-h-[calc(100vh-320px)]">
                <table className="w-full">
-                 <thead>
+                 <thead className={`sticky top-0 z-20 ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-white'}`}>
                    <tr className={theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'}>
-                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider sticky left-0 z-10 ${
+                     <th className={`px-4 py-3 text-left text-xs font-bold uppercase tracking-wider sticky left-0 z-30 ${
                        theme === 'Midnight' ? 'bg-slate-800/90' : 'bg-gray-50'
                      } ${styles.muted}`}>
                        Operator
                      </th>
-                     {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => (
+                     {skills.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => (
                        <th key={skill} className={`px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wider ${styles.muted}`}>
                          <div className="writing-mode-vertical transform -rotate-45 origin-bottom-left whitespace-nowrap h-20 flex items-end">
                            {skill}
@@ -2163,7 +3518,7 @@ function App() {
                            </span>
                          </div>
                        </td>
-                       {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
+                       {skills.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
                          const hasSkill = op.skills.includes(skill);
                          return (
                            <td key={skill} className="px-2 py-2 text-center">
@@ -2187,7 +3542,7 @@ function App() {
              {/* Skills Coverage Summary */}
              <div className={`px-4 py-3 border-t ${theme === 'Midnight' ? 'border-slate-800 bg-slate-800/30' : 'border-gray-100 bg-gray-50'}`}>
                <div className="flex flex-wrap gap-4">
-                 {INITIAL_SKILLS.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
+                 {skills.filter(s => !['Process', 'People', 'Off Process', 'Process/AD'].includes(s)).map(skill => {
                    const count = filteredOperators.filter(op => op.type !== 'Coordinator' && op.skills.includes(skill)).length;
                    const total = filteredOperators.filter(op => op.type !== 'Coordinator').length;
                    const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
@@ -2225,17 +3580,89 @@ function App() {
         
         {/* Settings Sidebar */}
         <div className={`w-full lg:w-64 shrink-0 rounded-2xl p-2 border flex flex-col gap-1 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200 shadow-sm'}`}>
+           {/* Group 0: Appearance - first for immediate customization */}
+           <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+             Appearance
+           </div>
+           <button
+             onClick={() => setSettingsTab('appearance')}
+             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+               settingsTab === 'appearance'
+                 ? (theme === 'Midnight' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-md')
+                 : (theme === 'Midnight' ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900')
+             }`}
+           >
+             <Palette className="h-4 w-4" />
+             Theme & Colors
+           </button>
+
+           {/* Separator */}
+           <div className={`my-2 border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`} />
+
+           {/* Group 1: Schedule Configuration - ordered foundation → behavior */}
+           <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+             Schedule Config
+           </div>
            {[
-             { id: 'tasks', label: 'Task Definitions', icon: Sliders },
-             { id: 'requirements', label: 'Staffing Requirements', icon: Users },
-             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },
-             { id: 'integrations', label: 'Integrations', icon: Puzzle },
-             { id: 'data', label: 'Data Management', icon: Database },
+             { id: 'skills', label: 'Skills Library', icon: Award },           // 1. Foundation: define competencies
+             { id: 'task-management', label: 'Tasks', icon: Layers },          // 2. Tasks use skills
+             { id: 'requirements', label: 'Staffing Requirements', icon: Users }, // 3. Per-task staffing needs
+             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },   // 4. Behavioral configuration
            ].map((item) => (
              <button
                key={item.id}
-               onClick={() => setSettingsTab(item.id as any)}
-               className={`flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${
+               onClick={() => setSettingsTab(item.id as typeof settingsTab)}
+               className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                 settingsTab === item.id
+                   ? (theme === 'Midnight' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-md')
+                   : (theme === 'Midnight' ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900')
+               }`}
+             >
+               <item.icon className="h-4 w-4" />
+               {item.label}
+             </button>
+           ))}
+
+           {/* Separator */}
+           <div className={`my-2 border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`} />
+
+           {/* Group 2: Account & Preferences */}
+           <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+             Account
+           </div>
+           {[
+             { id: 'profile', label: 'My Profile', icon: User },
+             { id: 'integrations', label: 'Integrations', icon: Puzzle },
+           ].map((item) => (
+             <button
+               key={item.id}
+               onClick={() => setSettingsTab(item.id as typeof settingsTab)}
+               className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                 settingsTab === item.id
+                   ? (theme === 'Midnight' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-md')
+                   : (theme === 'Midnight' ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900')
+               }`}
+             >
+               <item.icon className="h-4 w-4" />
+               {item.label}
+             </button>
+           ))}
+
+           {/* Separator */}
+           <div className={`my-2 border-t ${theme === 'Midnight' ? 'border-slate-800' : 'border-gray-100'}`} />
+
+           {/* Group 3: System */}
+           <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
+             System
+           </div>
+           {[
+             { id: 'data', label: 'Data Management', icon: Database },
+             { id: 'feedback', label: 'User Feedback', icon: Send },
+           ].map((item) => (
+             <button
+               key={item.id}
+               onClick={() => setSettingsTab(item.id as typeof settingsTab)}
+               className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                  settingsTab === item.id
                    ? (theme === 'Midnight' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-md')
                    : (theme === 'Midnight' ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900')
@@ -2249,91 +3676,1569 @@ function App() {
 
         {/* Settings Content Panel */}
         <div className={`flex-1 w-full rounded-3xl p-6 lg:p-10 border min-h-[600px] ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200 shadow-sm'}`}>
-           
-           {settingsTab === 'tasks' && (
-              <div className="space-y-6">
-                 <div className="flex justify-between items-center mb-6">
-                     <div>
-                       <h2 className={`text-xl font-bold ${styles.text}`}>Task Configuration</h2>
-                       <p className={`text-sm ${styles.muted}`}>Define tasks, skills, and visual coding.</p>
-                     </div>
-                     <button
-                        onClick={handleAddNewTask}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${theme === 'Midnight' ? 'bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
-                     >
-                        <Plus className="h-4 w-4" /> New Task
-                     </button>
+
+           {/* Appearance Tab */}
+           {settingsTab === 'appearance' && (
+              <div className="space-y-8">
+                 {/* Header */}
+                 <div className="mb-8 border-b pb-6 border-gray-100/10">
+                    <h2 className={`text-xl font-bold mb-2 ${styles.text}`}>Theme & Colors</h2>
+                    <p className={`text-sm ${styles.muted}`}>
+                       Customize the app's appearance and task color palette.
+                    </p>
                  </div>
 
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {tasks.map((task) => (
-                       <div key={task.id} className={`group flex items-center gap-4 p-4 rounded-2xl border transition-all hover:shadow-md ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
-                          {/* Preview Pill */}
-                          <div className="shrink-0 flex flex-col items-center gap-2">
-                             <span className="text-[10px] uppercase font-bold text-gray-400">Preview</span>
-                             <div 
-                                className="w-16 h-12 rounded-lg flex items-center justify-center text-[10px] font-bold text-center p-1 shadow-sm"
-                                style={getTaskStyle(task.id)}
-                             >
-                                {task.name}
+                 {/* App Theme Section */}
+                 <div className="space-y-4">
+                    <h3 className={`text-lg font-semibold ${styles.text}`}>App Theme</h3>
+                    <div className="grid grid-cols-2 gap-4 max-w-md">
+                       <button
+                          onClick={() => {
+                             setTheme('Modern');
+                             saveSettings('Modern', schedulingRules, skills);
+                             toast.success('Theme changed to Modern');
+                          }}
+                          className={`relative p-4 rounded-xl border-2 transition-all ${
+                             theme === 'Modern'
+                                ? 'border-blue-500 ring-2 ring-blue-500/20'
+                                : 'border-gray-200 hover:border-gray-300'
+                          } bg-white`}
+                       >
+                          <div className="flex items-center gap-3 mb-3">
+                             <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
+                                <Monitor className="w-4 h-4 text-white" />
                              </div>
+                             <span className="font-medium text-gray-900">Modern</span>
                           </div>
-
-                          {/* Controls */}
-                          <div className="flex-1 space-y-3">
-                             <div className="flex items-center gap-2">
-                                <div className="relative overflow-hidden w-6 h-6 rounded-full shadow-inner ring-1 ring-black/5 cursor-pointer hover:scale-110 transition-transform">
-                                   <input 
-                                      type="color" 
-                                      value={task.color} 
-                                      onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, color: e.target.value} : t))}
-                                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-                                   />
-                                   <div className="w-full h-full" style={{ backgroundColor: task.color }} />
-                                </div>
-                                <input 
-                                   type="text" 
-                                   value={task.name}
-                                   onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, name: e.target.value} : t))}
-                                   className={`flex-1 bg-transparent text-sm font-bold outline-none border-b border-transparent focus:border-indigo-500 ${styles.text}`}
-                                />
-                             </div>
-                             
-                             <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-semibold text-gray-500 uppercase">Req. Skill:</span>
-                                <select
-                                   value={task.requiredSkill}
-                                   onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
-                                   className={`text-xs font-medium bg-transparent outline-none cursor-pointer hover:underline ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600'}`}
-                                >
-                                   {INITIAL_SKILLS.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                             </div>
-
-                             {/* Required Operators Control */}
-                             <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-semibold text-gray-500 uppercase">Operators:</span>
-                                <div className="flex items-center gap-1">
-                                   <button
-                                      onClick={() => handleUpdateTaskRequiredOperators(task.id, (typeof task.requiredOperators === 'number' ? task.requiredOperators : 1) - 1)}
-                                      className={`w-5 h-5 rounded flex items-center justify-center text-xs font-bold ${theme === 'Midnight' ? 'bg-slate-900 text-slate-400 hover:bg-slate-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
-                                   >-</button>
-                                   <span className={`w-5 text-center text-xs font-bold ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600'}`}>
-                                      {typeof task.requiredOperators === 'number' ? task.requiredOperators : 1}
-                                   </span>
-                                   <button
-                                      onClick={() => handleUpdateTaskRequiredOperators(task.id, (typeof task.requiredOperators === 'number' ? task.requiredOperators : 1) + 1)}
-                                      className={`w-5 h-5 rounded flex items-center justify-center text-xs font-bold ${theme === 'Midnight' ? 'bg-slate-900 text-slate-400 hover:bg-slate-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
-                                   >+</button>
-                                </div>
-                             </div>
+                          <div className="flex gap-1">
+                             <div className="w-6 h-3 rounded bg-blue-500" />
+                             <div className="w-6 h-3 rounded bg-gray-200" />
+                             <div className="w-6 h-3 rounded bg-gray-100" />
                           </div>
+                          {theme === 'Modern' && (
+                             <div className="absolute top-2 right-2">
+                                <Check className="w-5 h-5 text-blue-500" />
+                             </div>
+                          )}
+                       </button>
+
+                       <button
+                          onClick={() => {
+                             setTheme('Midnight');
+                             saveSettings('Midnight', schedulingRules, skills);
+                             toast.success('Theme changed to Midnight');
+                          }}
+                          className={`relative p-4 rounded-xl border-2 transition-all ${
+                             theme === 'Midnight'
+                                ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                                : 'border-slate-600 hover:border-slate-500'
+                          } bg-slate-900`}
+                       >
+                          <div className="flex items-center gap-3 mb-3">
+                             <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
+                                <Moon className="w-4 h-4 text-white" />
+                             </div>
+                             <span className="font-medium text-slate-200">Midnight</span>
+                          </div>
+                          <div className="flex gap-1">
+                             <div className="w-6 h-3 rounded bg-indigo-500" />
+                             <div className="w-6 h-3 rounded bg-slate-700" />
+                             <div className="w-6 h-3 rounded bg-slate-800" />
+                          </div>
+                          {theme === 'Midnight' && (
+                             <div className="absolute top-2 right-2">
+                                <Check className="w-5 h-5 text-indigo-400" />
+                             </div>
+                          )}
+                       </button>
+                    </div>
+                 </div>
+
+                 {/* Color Palette Section */}
+                 <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                       <div>
+                          <h3 className={`text-lg font-semibold ${styles.text}`}>Task Color Palette</h3>
+                          <p className={`text-sm ${styles.muted}`}>Choose a color scheme for your tasks</p>
                        </div>
-                    ))}
+                    </div>
+
+                    <div className="space-y-3">
+                       {COLOR_PALETTES.map((palette) => (
+                          <button
+                             key={palette.id}
+                             onClick={() => {
+                                setAppearance(prev => ({ ...prev, activeThemeId: palette.id }));
+                                toast.success(`Palette changed to ${palette.name}`);
+                             }}
+                             className={`w-full p-4 rounded-xl border-2 transition-all text-left ${
+                                appearance.activeThemeId === palette.id
+                                   ? theme === 'Midnight'
+                                      ? 'border-indigo-500 bg-slate-800/50 ring-2 ring-indigo-500/20'
+                                      : 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-500/20'
+                                   : theme === 'Midnight'
+                                      ? 'border-slate-700 hover:border-slate-600 bg-slate-800/30'
+                                      : 'border-gray-200 hover:border-gray-300 bg-gray-50/50'
+                             }`}
+                          >
+                             <div className="flex items-start justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                   <span className={`font-semibold ${styles.text}`}>{palette.name}</span>
+                                   {palette.isAccessible && (
+                                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                         theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'
+                                      }`}>
+                                         Accessible
+                                      </span>
+                                   )}
+                                </div>
+                                {appearance.activeThemeId === palette.id && (
+                                   <Check className={`w-5 h-5 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-500'}`} />
+                                )}
+                             </div>
+                             <p className={`text-sm mb-3 ${styles.muted}`}>{palette.description}</p>
+                             <div className="flex gap-1.5 flex-wrap">
+                                {palette.colors.map((color, idx) => (
+                                   <div
+                                      key={idx}
+                                      className="w-7 h-7 rounded-lg shadow-sm"
+                                      style={{ backgroundColor: color.hex }}
+                                      title={color.name}
+                                   />
+                                ))}
+                             </div>
+                          </button>
+                       ))}
+                    </div>
+
+                    {/* Apply to existing tasks button */}
+                    <button
+                       onClick={() => setShowApplyPaletteModal(true)}
+                       className={`mt-4 w-full p-3 rounded-xl border-2 border-dashed transition-all flex items-center justify-center gap-2 ${
+                          theme === 'Midnight'
+                             ? 'border-slate-600 text-slate-400 hover:border-indigo-500 hover:text-indigo-400 hover:bg-indigo-500/10'
+                             : 'border-gray-300 text-gray-500 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50'
+                       }`}
+                    >
+                       <Palette className="w-4 h-4" />
+                       <span className="text-sm font-medium">Apply palette to existing tasks</span>
+                    </button>
+                 </div>
+
+                 {/* Recent Colors Section */}
+                 {appearance.recentColors.length > 0 && (
+                    <div className="space-y-4">
+                       <div className="flex items-center justify-between">
+                          <div>
+                             <h3 className={`text-lg font-semibold ${styles.text}`}>Recent Custom Colors</h3>
+                             <p className={`text-sm ${styles.muted}`}>Colors you've used outside the palette</p>
+                          </div>
+                          <button
+                             onClick={() => {
+                                setAppearance(prev => ({ ...prev, recentColors: [] }));
+                                toast.success('Recent colors cleared');
+                             }}
+                             className={`text-sm px-3 py-1 rounded-lg ${
+                                theme === 'Midnight'
+                                   ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                                   : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                             }`}
+                          >
+                             Clear
+                          </button>
+                       </div>
+                       <div className="flex gap-2 flex-wrap">
+                          {appearance.recentColors.map((color, idx) => (
+                             <div
+                                key={idx}
+                                className={`w-10 h-10 rounded-lg shadow-sm border-2 ${
+                                   theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'
+                                }`}
+                                style={{ backgroundColor: color.hex }}
+                                title={color.hex}
+                             />
+                          ))}
+                       </div>
+                    </div>
+                 )}
+
+                 {/* Preview Section */}
+                 <div className="space-y-4">
+                    <h3 className={`text-lg font-semibold ${styles.text}`}>Preview</h3>
+                    <div className={`p-4 rounded-xl border ${
+                       theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'
+                    }`}>
+                       <p className={`text-sm mb-3 ${styles.muted}`}>Sample task badges with current palette:</p>
+                       <div className="flex flex-wrap gap-2">
+                          {activePalette.colors.slice(0, 8).map((color, idx) => (
+                             <span
+                                key={idx}
+                                className="px-3 py-1.5 rounded-lg text-sm font-medium"
+                                style={{
+                                   backgroundColor: color.hex,
+                                   color: getContrastTextColor(color.hex)
+                                }}
+                             >
+                                Task {idx + 1}
+                             </span>
+                          ))}
+                       </div>
+                    </div>
                  </div>
               </div>
            )}
 
+           {settingsTab === 'profile' && currentUser && (
+              <ProfileSettings
+                user={currentUser}
+                theme={theme}
+                styles={styles}
+                onUpdateUser={async (updates) => {
+                  const updated = await updateUser(currentUser.id, updates);
+                  if (updated) {
+                    setCurrentUser(updated);
+                    // Also update session data for sidebar
+                    updateSessionData({
+                      displayName: updated.displayName,
+                      profilePicture: updated.profilePicture,
+                    });
+                  }
+                }}
+                onChangePassword={async (current, newPass) => {
+                  await changePassword(currentUser.id, current, newPass);
+                }}
+                onProcessPicture={processProfilePicture}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'skills' && (
+              <div className="space-y-6">
+                 {/* Header */}
+                 <div className="flex items-center justify-between">
+                    <div>
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Skills Library</h2>
+                       <p className={`text-sm mt-1 ${styles.muted}`}>Manage the skills that can be assigned to operators and required by tasks.</p>
+                    </div>
+                 </div>
+
+                 {/* Add New Skill */}
+                 <div className={`flex items-center gap-3 p-4 rounded-xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <input
+                       type="text"
+                       value={newSkillName}
+                       onChange={(e) => setNewSkillName(e.target.value)}
+                       placeholder="Enter new skill name..."
+                       className={`flex-1 px-4 py-2.5 rounded-lg border outline-none focus:ring-2 ${
+                          theme === 'Midnight'
+                             ? 'bg-slate-900 border-slate-600 text-white placeholder:text-slate-500 focus:ring-indigo-500'
+                             : 'bg-white border-gray-200 text-slate-900 placeholder:text-gray-400 focus:ring-blue-500'
+                       }`}
+                       onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newSkillName.trim()) {
+                             const trimmed = newSkillName.trim();
+                             if (skills.includes(trimmed)) {
+                                toast.error('Skill already exists');
+                                return;
+                             }
+                             const updated = [...skills, trimmed];
+                             setSkills(updated);
+                             saveSkills(updated);
+                             setNewSkillName('');
+                             toast.success(`Skill "${trimmed}" added`);
+                          }
+                       }}
+                    />
+                    <button
+                       onClick={() => {
+                          const trimmed = newSkillName.trim();
+                          if (!trimmed) return;
+                          if (skills.includes(trimmed)) {
+                             toast.error('Skill already exists');
+                             return;
+                          }
+                          const updated = [...skills, trimmed];
+                          setSkills(updated);
+                          saveSkills(updated);
+                          setNewSkillName('');
+                          toast.success(`Skill "${trimmed}" added`);
+                       }}
+                       disabled={!newSkillName.trim()}
+                       className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors ${
+                          theme === 'Midnight'
+                             ? 'bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-slate-700 disabled:text-slate-500'
+                             : 'bg-blue-600 hover:bg-blue-500 text-white disabled:bg-gray-200 disabled:text-gray-400'
+                       }`}
+                    >
+                       <Plus className="w-4 h-4" />
+                       Add Skill
+                    </button>
+                 </div>
+
+                 {/* Skills Categories */}
+                 <div className="space-y-6">
+                    {/* TC Skills (System) */}
+                    <div>
+                       <div className="flex items-center gap-2 mb-3">
+                          <Shield className={`w-4 h-4 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
+                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`}>
+                             Coordinator Skills (System)
+                          </h3>
+                       </div>
+                       <div className="flex flex-wrap gap-2">
+                          {TC_SKILLS.map((skill) => (
+                             <div
+                                key={skill}
+                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
+                                   theme === 'Midnight'
+                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                                      : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                }`}
+                             >
+                                <Lock className="w-3 h-3" />
+                                {skill}
+                             </div>
+                          ))}
+                       </div>
+                       <p className={`text-xs mt-2 ${styles.muted}`}>
+                          These skills are reserved for Team Coordinators and cannot be modified.
+                       </p>
+                    </div>
+
+                    {/* Custom Skills */}
+                    <div>
+                       <div className="flex items-center gap-2 mb-3">
+                          <Award className={`w-4 h-4 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
+                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`}>
+                             Operator Skills ({skills.filter(s => !TC_SKILLS.includes(s)).length})
+                          </h3>
+                       </div>
+                       <div className="flex flex-wrap gap-2">
+                          {skills.filter(s => !TC_SKILLS.includes(s)).map((skill) => (
+                             <div
+                                key={skill}
+                                className={`group inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                                   theme === 'Midnight'
+                                      ? 'bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600'
+                                      : 'bg-white text-slate-700 border border-gray-200 hover:border-gray-300 shadow-sm'
+                                }`}
+                             >
+                                {editingSkill === skill ? (
+                                   <input
+                                      type="text"
+                                      value={editingSkillName}
+                                      onChange={(e) => setEditingSkillName(e.target.value)}
+                                      className={`w-32 px-2 py-0.5 rounded border outline-none text-sm ${
+                                         theme === 'Midnight'
+                                            ? 'bg-slate-900 border-slate-600 text-white'
+                                            : 'bg-gray-50 border-gray-300 text-slate-900'
+                                      }`}
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                         if (e.key === 'Enter') {
+                                            const trimmed = editingSkillName.trim();
+                                            if (!trimmed) return;
+                                            if (skills.includes(trimmed) && trimmed !== skill) {
+                                               toast.error('Skill name already exists');
+                                               return;
+                                            }
+                                            const updated = skills.map(s => s === skill ? trimmed : s);
+                                            setSkills(updated);
+                                            saveSkills(updated);
+                                            // Update tasks that use this skill
+                                            setTasks(tasks.map(t => t.requiredSkill === skill ? { ...t, requiredSkill: trimmed } : t));
+                                            // Update operators that have this skill
+                                            setOperators(operators.map(op => ({
+                                               ...op,
+                                               skills: op.skills.map(s => s === skill ? trimmed : s)
+                                            })));
+                                            setEditingSkill(null);
+                                            toast.success(`Skill renamed to "${trimmed}"`);
+                                         } else if (e.key === 'Escape') {
+                                            setEditingSkill(null);
+                                         }
+                                      }}
+                                      onBlur={() => setEditingSkill(null)}
+                                   />
+                                ) : (
+                                   <>
+                                      <span>{skill}</span>
+                                      <div className="hidden group-hover:flex items-center gap-1 ml-1">
+                                         <button
+                                            onClick={() => {
+                                               setEditingSkill(skill);
+                                               setEditingSkillName(skill);
+                                            }}
+                                            className={`p-1 rounded transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'hover:bg-slate-700 text-slate-500 hover:text-slate-300'
+                                                  : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
+                                            }`}
+                                            title="Edit skill"
+                                         >
+                                            <Edit2 className="w-3 h-3" />
+                                         </button>
+                                         <button
+                                            onClick={() => setSkillToDelete(skill)}
+                                            className={`p-1 rounded transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'hover:bg-red-500/10 text-slate-500 hover:text-red-400'
+                                                  : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
+                                            }`}
+                                            title="Delete skill"
+                                         >
+                                            <Trash2 className="w-3 h-3" />
+                                         </button>
+                                      </div>
+                                   </>
+                                )}
+                             </div>
+                          ))}
+                       </div>
+                    </div>
+                 </div>
+
+                 {/* Info Box */}
+                 <div className={`flex items-start gap-3 p-4 rounded-xl ${
+                    theme === 'Midnight' ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-blue-50 border border-blue-100'
+                 }`}>
+                    <AlertCircle className={`w-5 h-5 shrink-0 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
+                    <div>
+                       <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-blue-300' : 'text-blue-800'}`}>
+                          Skill Dependencies
+                       </p>
+                       <p className={`text-sm mt-1 ${theme === 'Midnight' ? 'text-blue-400/80' : 'text-blue-600'}`}>
+                          Skills are linked to tasks and operators. When you edit a skill name, it will update everywhere. Deleting a skill will remove it from all operators and may affect task assignments.
+                       </p>
+                    </div>
+                 </div>
+              </div>
+           )}
+
+           {settingsTab === 'task-management' && (() => {
+              // Separate TC tasks from operator tasks
+              const operatorTasks = tasks.filter(t => !TC_SKILLS.includes(t.requiredSkill));
+              const tcTasks = tasks.filter(t => TC_SKILLS.includes(t.requiredSkill));
+
+              // Filter operator tasks only (TC tasks shown separately)
+              const filteredTasks = operatorTasks.filter(task => {
+                 const matchesSearch = task.name.toLowerCase().includes(taskSearch.toLowerCase());
+                 const matchesSkill = skillFilter === 'all' || task.requiredSkill === skillFilter;
+                 return matchesSearch && matchesSkill;
+              });
+
+              // Get unique skills from operator tasks only
+              const taskSkills = [...new Set(operatorTasks.map(t => t.requiredSkill))];
+
+              // Check if any operator has a skill
+              const getOperatorsWithSkill = (skill: string) => operators.filter(op => op.skills.includes(skill));
+
+              return (
+              <div className="space-y-4">
+                 {/* Header with search and filters */}
+                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Tasks</h2>
+                       <p className={`text-sm mt-1 ${styles.muted}`}>{tasks.length} tasks configured</p>
+                    </div>
+                    <button
+                       onClick={openAddTaskModal}
+                       className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                          theme === 'Midnight'
+                             ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                             : 'bg-blue-600 hover:bg-blue-500 text-white'
+                       }`}
+                    >
+                       <Plus className="w-4 h-4" />
+                       Add Task
+                    </button>
+                 </div>
+
+                 {/* Search and Filter Bar */}
+                 <div className={`flex flex-col sm:flex-row gap-3 p-3 rounded-xl border ${
+                    theme === 'Midnight' ? 'bg-slate-800/50 border-slate-700' : 'bg-gray-50 border-gray-200'
+                 }`}>
+                    <div className="relative flex-1">
+                       <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${styles.muted}`} />
+                       <input
+                          type="text"
+                          placeholder="Search tasks..."
+                          value={taskSearch}
+                          onChange={(e) => setTaskSearch(e.target.value)}
+                          className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm outline-none transition-colors ${
+                             theme === 'Midnight'
+                                ? 'bg-slate-900 border-slate-600 text-slate-200 placeholder-slate-500 focus:border-indigo-500'
+                                : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:border-blue-500'
+                          }`}
+                       />
+                    </div>
+                    <select
+                       value={skillFilter}
+                       onChange={(e) => setSkillFilter(e.target.value)}
+                       className={`px-3 py-2 rounded-lg border text-sm outline-none ${
+                          theme === 'Midnight'
+                             ? 'bg-slate-900 border-slate-600 text-slate-300'
+                             : 'bg-white border-gray-200 text-gray-700'
+                       }`}
+                    >
+                       <option value="all">All Skills ({tasks.length})</option>
+                       {taskSkills.map(skill => (
+                          <option key={skill} value={skill}>
+                             {skill} ({tasks.filter(t => t.requiredSkill === skill).length})
+                          </option>
+                       ))}
+                    </select>
+                 </div>
+
+                 {/* Compact Task Table */}
+                 <div className={`rounded-xl border overflow-hidden ${
+                    theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+                 }`}>
+                    {/* Table Header */}
+                    <div className={`grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-3 text-xs font-semibold uppercase tracking-wider border-b ${
+                       theme === 'Midnight' ? 'bg-slate-900/50 border-slate-700 text-slate-400' : 'bg-gray-50 border-gray-200 text-gray-500'
+                    }`}>
+                       <div className="w-6"></div>
+                       <div>Task</div>
+                       <div className="hidden sm:block">Skill</div>
+                       <div className="hidden sm:block">Staffing</div>
+                       <div className="w-20 text-right">Actions</div>
+                    </div>
+
+                    {/* Task Rows */}
+                    <div className="divide-y divide-gray-100 dark:divide-slate-700">
+                       {filteredTasks.length === 0 ? (
+                          <div className={`px-4 py-8 text-center ${styles.muted}`}>
+                             {taskSearch || skillFilter !== 'all' ? 'No tasks match your filters' : 'No tasks configured'}
+                          </div>
+                       ) : (
+                          filteredTasks.map((task) => {
+                             const requirement = taskRequirements.find(r => r.taskId === task.id);
+                             const hasRequirement = !!requirement;
+                             const isExpanded = expandedTaskId === task.id;
+                             const qualifiedOperators = getOperatorsWithSkill(task.requiredSkill);
+                             const hasNoOperators = qualifiedOperators.length === 0;
+
+                             return (
+                                <div key={task.id} className={theme === 'Midnight' ? 'divide-slate-700' : 'divide-gray-100'}>
+                                   {/* Compact Row */}
+                                   <div
+                                      className={`grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer transition-colors ${
+                                         isExpanded
+                                            ? (theme === 'Midnight' ? 'bg-slate-700/50' : 'bg-blue-50')
+                                            : (theme === 'Midnight' ? 'hover:bg-slate-700/30' : 'hover:bg-gray-50')
+                                      }`}
+                                      onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                                   >
+                                      {/* Color indicator */}
+                                      <div
+                                         className="w-4 h-4 rounded-full ring-2 ring-offset-2 shrink-0"
+                                         style={{ backgroundColor: task.color, ringColor: task.color }}
+                                         title={task.color}
+                                      />
+
+                                      {/* Task name + mobile skill */}
+                                      <div className="min-w-0">
+                                         <div className={`font-medium truncate ${styles.text}`}>{task.name}</div>
+                                         <div className={`text-xs sm:hidden ${styles.muted}`}>{task.requiredSkill}</div>
+                                      </div>
+
+                                      {/* Skill badge */}
+                                      <div className="hidden sm:block">
+                                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${
+                                            theme === 'Midnight' ? 'bg-slate-700 text-slate-300' : 'bg-gray-100 text-gray-700'
+                                         }`}>
+                                            {task.requiredSkill}
+                                            {hasNoOperators && (
+                                               <AlertTriangle className="w-3 h-3 text-amber-500" title="No operators have this skill" />
+                                            )}
+                                         </span>
+                                      </div>
+
+                                      {/* Staffing badge */}
+                                      <div className="hidden sm:block">
+                                         {hasRequirement && requirement ? (
+                                            <button
+                                               onClick={(e) => { e.stopPropagation(); setSettingsTab('requirements'); }}
+                                               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                                                  theme === 'Midnight'
+                                                     ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                                                     : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                               }`}
+                                               title="Click to edit in Staffing Requirements"
+                                            >
+                                               {requirement.defaultRequirements.map(r => `${r.count} ${r.type}`).join(', ')}
+                                               <ChevronRight className="w-3 h-3" />
+                                            </button>
+                                         ) : (
+                                            <span className={`text-xs ${styles.muted}`}>—</span>
+                                         )}
+                                      </div>
+
+                                      {/* Actions */}
+                                      <div className="flex items-center gap-1 justify-end">
+                                         <button
+                                            onClick={(e) => { e.stopPropagation(); setExpandedTaskId(isExpanded ? null : task.id); }}
+                                            className={`p-1.5 rounded-lg transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                                                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                            }`}
+                                            title={isExpanded ? 'Collapse' : 'Expand to edit'}
+                                         >
+                                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <Edit2 className="w-4 h-4" />}
+                                         </button>
+                                         <button
+                                            onClick={(e) => { e.stopPropagation(); setTaskToDelete(task); }}
+                                            className={`p-1.5 rounded-lg transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'text-slate-500 hover:text-red-400 hover:bg-red-500/10'
+                                                  : 'text-gray-400 hover:text-red-500 hover:bg-red-50'
+                                            }`}
+                                            title="Delete task"
+                                         >
+                                            <Trash2 className="w-4 h-4" />
+                                         </button>
+                                      </div>
+                                   </div>
+
+                                   {/* Expanded Edit Panel */}
+                                   {isExpanded && (
+                                      <div className={`px-4 py-4 border-t ${
+                                         theme === 'Midnight' ? 'bg-slate-800/50 border-slate-700' : 'bg-gray-50/50 border-gray-100'
+                                      }`}>
+                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {/* Left: Name & Skill */}
+                                            <div className="space-y-4">
+                                               <div>
+                                                  <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                     Task Name
+                                                  </label>
+                                                  <input
+                                                     type="text"
+                                                     value={task.name}
+                                                     onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, name: e.target.value} : t))}
+                                                     onBlur={(e) => {
+                                                        const trimmed = e.target.value.trim();
+                                                        if (!trimmed) {
+                                                           setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
+                                                           addToast('warning', 'Task name cannot be empty');
+                                                        } else if (trimmed !== task.name) {
+                                                           setTasks(tasks.map(t => t.id === task.id ? {...t, name: trimmed} : t));
+                                                        }
+                                                     }}
+                                                     className={`w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors ${
+                                                        theme === 'Midnight'
+                                                           ? 'bg-slate-900 border-slate-600 text-slate-200 focus:border-indigo-500'
+                                                           : 'bg-white border-gray-200 text-gray-900 focus:border-blue-500'
+                                                     }`}
+                                                  />
+                                               </div>
+                                               <div>
+                                                  <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                     Required Skill
+                                                  </label>
+                                                  <select
+                                                     value={task.requiredSkill}
+                                                     onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
+                                                     className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
+                                                        theme === 'Midnight'
+                                                           ? 'bg-slate-900 border-slate-600 text-slate-300'
+                                                           : 'bg-white border-gray-200 text-gray-700'
+                                                     }`}
+                                                  >
+                                                     {skills.map(s => <option key={s} value={s}>{s}</option>)}
+                                                  </select>
+                                                  {hasNoOperators && (
+                                                     <p className="mt-2 text-xs text-amber-500 flex items-center gap-1">
+                                                        <AlertTriangle className="w-3 h-3" />
+                                                        No operators have this skill
+                                                     </p>
+                                                  )}
+                                               </div>
+                                            </div>
+
+                                            {/* Right: Color & Preview */}
+                                            <div className="space-y-4">
+                                               <div>
+                                                  <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                     Color
+                                                  </label>
+                                                  <div className="space-y-2">
+                                                     {/* Recent colors */}
+                                                     {appearance.recentColors.length > 0 && (
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                           <span className={`text-xs ${styles.muted}`}>Recent:</span>
+                                                           {appearance.recentColors.map((color, idx) => (
+                                                              <button
+                                                                 key={`recent-${idx}`}
+                                                                 onClick={() => setTasks(tasks.map(t => t.id === task.id ? {...t, color: color.hex} : t))}
+                                                                 className={`w-6 h-6 rounded-md transition-all ${
+                                                                    task.color === color.hex ? 'ring-2 ring-offset-1 scale-110' : 'hover:scale-105'
+                                                                 } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                                                 style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                                                 title={`Recent: ${color.hex}`}
+                                                              />
+                                                           ))}
+                                                        </div>
+                                                     )}
+                                                     {/* Palette colors */}
+                                                     <div className="flex items-center gap-2 flex-wrap">
+                                                        {activePalette.colors.map((color) => (
+                                                           <button
+                                                              key={color.hex}
+                                                              onClick={() => setTasks(tasks.map(t => t.id === task.id ? {...t, color: color.hex} : t))}
+                                                              className={`w-7 h-7 rounded-lg transition-all ${
+                                                                 task.color === color.hex ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
+                                                              } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                                              style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                                              title={color.name}
+                                                           />
+                                                        ))}
+                                                        {/* Custom color picker */}
+                                                        <div className="relative">
+                                                           <input
+                                                              type="color"
+                                                              value={task.color}
+                                                              onChange={(e) => {
+                                                                 const newColor = e.target.value;
+                                                                 setTasks(tasks.map(t => t.id === task.id ? {...t, color: newColor} : t));
+                                                                 // Add to recent colors if it's a custom color
+                                                                 if (!isColorInPalette(newColor, activePalette)) {
+                                                                    setAppearance(prev => ({ ...prev, recentColors: addRecentColor(prev.recentColors, newColor) }));
+                                                                 }
+                                                              }}
+                                                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                                              title="Pick custom color"
+                                                           />
+                                                           <div className={`w-7 h-7 rounded-lg border-2 border-dashed flex items-center justify-center ${
+                                                              theme === 'Midnight' ? 'border-slate-600 hover:border-slate-500' : 'border-gray-300 hover:border-gray-400'
+                                                           }`}>
+                                                              <Plus className={`w-3 h-3 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`} />
+                                                           </div>
+                                                        </div>
+                                                     </div>
+                                                  </div>
+                                               </div>
+                                               <div>
+                                                  <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                     Preview
+                                                  </label>
+                                                  <div className={`p-3 rounded-lg border ${
+                                                     theme === 'Midnight' ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                                                  }`}>
+                                                     <span
+                                                        className="inline-block px-3 py-1.5 rounded-md text-sm font-medium"
+                                                        style={getTaskStyle(task.id)}
+                                                     >
+                                                        {task.name || 'Task'}
+                                                     </span>
+                                                  </div>
+                                               </div>
+                                            </div>
+                                         </div>
+
+                                         {/* Staffing link */}
+                                         <div className={`mt-4 pt-4 border-t flex items-center justify-between ${
+                                            theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'
+                                         }`}>
+                                            <div className="flex items-center gap-2">
+                                               <Users className={`w-4 h-4 ${styles.muted}`} />
+                                               <span className={`text-sm ${styles.text}`}>Staffing Requirements</span>
+                                               {hasRequirement ? (
+                                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                                     theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'
+                                                  }`}>
+                                                     {requirement?.defaultRequirements.map(r => `${r.count} ${r.type}`).join(', ')}
+                                                  </span>
+                                               ) : (
+                                                  <span className={`text-xs ${styles.muted}`}>Not configured</span>
+                                               )}
+                                            </div>
+                                            <button
+                                               onClick={() => setSettingsTab('requirements')}
+                                               className={`text-sm font-medium flex items-center gap-1 transition-colors ${
+                                                  theme === 'Midnight' ? 'text-indigo-400 hover:text-indigo-300' : 'text-blue-600 hover:text-blue-700'
+                                               }`}
+                                            >
+                                               {hasRequirement ? 'Edit' : 'Configure'}
+                                               <ChevronRight className="w-4 h-4" />
+                                            </button>
+                                         </div>
+                                      </div>
+                                   )}
+                                </div>
+                             );
+                          })
+                       )}
+                    </div>
+                 </div>
+
+                 {/* Quick stats for operator tasks */}
+                 <div className={`flex flex-wrap gap-4 text-xs ${styles.muted}`}>
+                    <span>{operatorTasks.filter(t => taskRequirements.some(r => r.taskId === t.id)).length} of {operatorTasks.length} tasks have staffing configured</span>
+                    <span>•</span>
+                    <span>{operatorTasks.filter(t => getOperatorsWithSkill(t.requiredSkill).length === 0).length} tasks have no qualified operators</span>
+                 </div>
+
+                 {/* TC Tasks Section */}
+                 {tcTasks.length > 0 && (
+                    <div className="mt-8 space-y-4">
+                       <div className={`flex items-center gap-3 pb-2 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                          <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-purple-500/20' : 'bg-purple-100'}`}>
+                             <Users className={`w-5 h-5 ${theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600'}`} />
+                          </div>
+                          <div>
+                             <h3 className={`text-lg font-bold ${styles.text}`}>Team Coordinator Tasks</h3>
+                             <p className={`text-sm ${styles.muted}`}>Reserved for Process, People, and Off-Process roles</p>
+                          </div>
+                       </div>
+
+                       <div className={`rounded-xl border overflow-hidden ${
+                          theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+                       }`}>
+                          <div className="divide-y divide-gray-100 dark:divide-slate-700">
+                             {tcTasks.map((task) => {
+                                const tcOperators = operators.filter(op => op.type === 'Coordinator');
+                                const isExpanded = expandedTaskId === task.id;
+
+                                return (
+                                   <div key={task.id} className={theme === 'Midnight' ? 'divide-slate-700' : 'divide-gray-100'}>
+                                      <div
+                                         className={`grid grid-cols-[auto_1fr_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer transition-colors ${
+                                            isExpanded
+                                               ? (theme === 'Midnight' ? 'bg-slate-700/50' : 'bg-purple-50')
+                                               : (theme === 'Midnight' ? 'hover:bg-slate-700/30' : 'hover:bg-gray-50')
+                                         }`}
+                                         onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                                      >
+                                         <div
+                                            className="w-4 h-4 rounded-full ring-2 ring-offset-2 shrink-0"
+                                            style={{ backgroundColor: task.color, ringColor: task.color }}
+                                         />
+                                         <div className="min-w-0">
+                                            <div className={`font-medium truncate ${styles.text}`}>{task.name}</div>
+                                            <div className={`text-xs ${styles.muted}`}>{task.requiredSkill}</div>
+                                         </div>
+                                         <span className={`text-xs ${styles.muted}`}>
+                                            {tcOperators.length} TC{tcOperators.length !== 1 ? 's' : ''} available
+                                         </span>
+                                         <button
+                                            onClick={(e) => { e.stopPropagation(); setExpandedTaskId(isExpanded ? null : task.id); }}
+                                            className={`p-1.5 rounded-lg transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                                                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                            }`}
+                                         >
+                                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                         </button>
+                                      </div>
+
+                                      {isExpanded && (
+                                         <div className={`px-4 py-4 border-t ${
+                                            theme === 'Midnight' ? 'bg-slate-800/50 border-slate-700' : 'bg-purple-50/50 border-gray-100'
+                                         }`}>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                               <div className="space-y-4">
+                                                  <div>
+                                                     <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                        Task Name
+                                                     </label>
+                                                     <input
+                                                        type="text"
+                                                        value={task.name}
+                                                        onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, name: e.target.value} : t))}
+                                                        onBlur={(e) => {
+                                                           const trimmed = e.target.value.trim();
+                                                           if (!trimmed) {
+                                                              setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
+                                                              addToast('warning', 'Task name cannot be empty');
+                                                           }
+                                                        }}
+                                                        className={`w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors ${
+                                                           theme === 'Midnight'
+                                                              ? 'bg-slate-900 border-slate-600 text-slate-200 focus:border-indigo-500'
+                                                              : 'bg-white border-gray-200 text-gray-900 focus:border-blue-500'
+                                                        }`}
+                                                     />
+                                                  </div>
+                                                  <div>
+                                                     <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                        Required Skill (TC Only)
+                                                     </label>
+                                                     <select
+                                                        value={task.requiredSkill}
+                                                        onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
+                                                        className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
+                                                           theme === 'Midnight'
+                                                              ? 'bg-slate-900 border-slate-600 text-slate-300'
+                                                              : 'bg-white border-gray-200 text-gray-700'
+                                                        }`}
+                                                     >
+                                                        {TC_SKILLS.map(s => <option key={s} value={s}>{s}</option>)}
+                                                     </select>
+                                                  </div>
+                                               </div>
+                                               <div className="space-y-4">
+                                                  <div>
+                                                     <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                        Color
+                                                     </label>
+                                                     <div className="space-y-2">
+                                                        {/* Recent colors */}
+                                                        {appearance.recentColors.length > 0 && (
+                                                           <div className="flex items-center gap-2 flex-wrap">
+                                                              <span className={`text-xs ${styles.muted}`}>Recent:</span>
+                                                              {appearance.recentColors.map((color, idx) => (
+                                                                 <button
+                                                                    key={`recent-tc-${idx}`}
+                                                                    onClick={() => setTasks(tasks.map(t => t.id === task.id ? {...t, color: color.hex} : t))}
+                                                                    className={`w-6 h-6 rounded-md transition-all ${
+                                                                       task.color === color.hex ? 'ring-2 ring-offset-1 scale-110' : 'hover:scale-105'
+                                                                    } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                                                    style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                                                    title={`Recent: ${color.hex}`}
+                                                                 />
+                                                              ))}
+                                                           </div>
+                                                        )}
+                                                        {/* Palette colors */}
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                           {activePalette.colors.map((color) => (
+                                                              <button
+                                                                 key={color.hex}
+                                                                 onClick={() => setTasks(tasks.map(t => t.id === task.id ? {...t, color: color.hex} : t))}
+                                                                 className={`w-7 h-7 rounded-lg transition-all ${
+                                                                    task.color === color.hex ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
+                                                                 } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                                                 style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                                                 title={color.name}
+                                                              />
+                                                           ))}
+                                                           {/* Custom color picker */}
+                                                           <div className="relative">
+                                                              <input
+                                                                 type="color"
+                                                                 value={task.color}
+                                                                 onChange={(e) => {
+                                                                    const newColor = e.target.value;
+                                                                    setTasks(tasks.map(t => t.id === task.id ? {...t, color: newColor} : t));
+                                                                    // Add to recent colors if it's a custom color
+                                                                    if (!isColorInPalette(newColor, activePalette)) {
+                                                                       setAppearance(prev => ({ ...prev, recentColors: addRecentColor(prev.recentColors, newColor) }));
+                                                                    }
+                                                                 }}
+                                                                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                                                 title="Pick custom color"
+                                                              />
+                                                              <div className={`w-7 h-7 rounded-lg border-2 border-dashed flex items-center justify-center ${
+                                                                 theme === 'Midnight' ? 'border-slate-600 hover:border-slate-500' : 'border-gray-300 hover:border-gray-400'
+                                                              }`}>
+                                                                 <Plus className={`w-3 h-3 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`} />
+                                                              </div>
+                                                           </div>
+                                                        </div>
+                                                     </div>
+                                                  </div>
+                                                  <div>
+                                                     <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${styles.muted}`}>
+                                                        Preview
+                                                     </label>
+                                                     <div className={`p-3 rounded-lg border ${
+                                                        theme === 'Midnight' ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                                                     }`}>
+                                                        <span
+                                                           className="inline-block px-3 py-1.5 rounded-md text-sm font-medium"
+                                                           style={getTaskStyle(task.id)}
+                                                        >
+                                                           {task.name || 'Task'}
+                                                        </span>
+                                                     </div>
+                                                  </div>
+                                               </div>
+                                            </div>
+                                         </div>
+                                      )}
+                                   </div>
+                                );
+                             })}
+                          </div>
+                       </div>
+
+                       <p className={`text-xs ${styles.muted}`}>
+                          <span className={`inline-flex items-center gap-1 ${theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600'}`}>
+                             <AlertTriangle className="w-3 h-3" />
+                             Note:
+                          </span>{' '}
+                          TC tasks can only be assigned to operators with the "Coordinator" type.
+                       </p>
+                    </div>
+                 )}
+              </div>
+              );
+           })()}
+
+           {/* Add Task Modal */}
+           {showAddTaskModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAddTaskModal(false)}>
+                 <div
+                    className={`w-full max-w-md mx-4 rounded-2xl shadow-2xl ${
+                       theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : 'bg-white'
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                 >
+                    {/* Modal Header */}
+                    <div className={`px-6 py-4 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                       <div className="flex items-center justify-between">
+                          <h3 className={`text-lg font-bold ${styles.text}`}>Add New Task</h3>
+                          <button
+                             onClick={() => setShowAddTaskModal(false)}
+                             className={`p-1.5 rounded-lg transition-colors ${
+                                theme === 'Midnight' ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-gray-100 text-gray-500'
+                             }`}
+                          >
+                             <X className="w-5 h-5" />
+                          </button>
+                       </div>
+                    </div>
+
+                    {/* Modal Body */}
+                    <div className="px-6 py-5 space-y-5">
+                       {/* Task Name */}
+                       <div>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Task Name</label>
+                          <input
+                             type="text"
+                             value={newTaskName}
+                             onChange={(e) => setNewTaskName(e.target.value)}
+                             placeholder="Enter task name..."
+                             autoFocus
+                             className={`w-full px-4 py-2.5 rounded-lg border text-sm outline-none transition-colors ${
+                                theme === 'Midnight'
+                                   ? 'bg-slate-900 border-slate-600 text-slate-200 placeholder-slate-500 focus:border-indigo-500'
+                                   : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:border-blue-500'
+                             }`}
+                          />
+                       </div>
+
+                       {/* Required Skill */}
+                       <div>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Required Skill</label>
+                          <select
+                             value={newTaskSkill}
+                             onChange={(e) => setNewTaskSkill(e.target.value)}
+                             className={`w-full px-4 py-2.5 rounded-lg border text-sm outline-none ${
+                                theme === 'Midnight'
+                                   ? 'bg-slate-900 border-slate-600 text-slate-300'
+                                   : 'bg-white border-gray-200 text-gray-700'
+                             }`}
+                          >
+                             {skills.filter(s => !TC_SKILLS.includes(s)).map(s => (
+                                <option key={s} value={s}>{s}</option>
+                             ))}
+                          </select>
+                       </div>
+
+                       {/* Color */}
+                       <div>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Color</label>
+                          <div className="space-y-2">
+                             {/* Recent colors */}
+                             {appearance.recentColors.length > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                   <span className={`text-xs ${styles.muted}`}>Recent:</span>
+                                   {appearance.recentColors.map((color, idx) => (
+                                      <button
+                                         key={`recent-new-${idx}`}
+                                         onClick={() => setNewTaskColor(color.hex)}
+                                         className={`w-7 h-7 rounded-md transition-all ${
+                                            newTaskColor === color.hex ? 'ring-2 ring-offset-1 scale-110' : 'hover:scale-105'
+                                         } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                         style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                         title={`Recent: ${color.hex}`}
+                                      />
+                                   ))}
+                                </div>
+                             )}
+                             {/* Palette colors */}
+                             <div className="flex items-center gap-2 flex-wrap">
+                                {activePalette.colors.map((color) => (
+                                   <button
+                                      key={color.hex}
+                                      onClick={() => setNewTaskColor(color.hex)}
+                                      className={`w-8 h-8 rounded-lg transition-all ${
+                                         newTaskColor === color.hex ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
+                                      } ${theme === 'Midnight' ? 'ring-offset-slate-800' : 'ring-offset-white'}`}
+                                      style={{ backgroundColor: color.hex, ringColor: color.hex }}
+                                      title={color.name}
+                                   />
+                                ))}
+                                {/* Custom color picker */}
+                                <div className="relative">
+                                   <input
+                                      type="color"
+                                      value={newTaskColor}
+                                      onChange={(e) => {
+                                         const newColor = e.target.value;
+                                         setNewTaskColor(newColor);
+                                         // Add to recent colors if it's a custom color
+                                         if (!isColorInPalette(newColor, activePalette)) {
+                                            setAppearance(prev => ({ ...prev, recentColors: addRecentColor(prev.recentColors, newColor) }));
+                                         }
+                                      }}
+                                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                      title="Pick custom color"
+                                   />
+                                   <div className={`w-8 h-8 rounded-lg border-2 border-dashed flex items-center justify-center transition-colors ${
+                                      theme === 'Midnight' ? 'border-slate-600 hover:border-slate-500' : 'border-gray-300 hover:border-gray-400'
+                                   }`}>
+                                      <Plus className={`w-4 h-4 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`} />
+                                   </div>
+                                </div>
+                             </div>
+                          </div>
+                       </div>
+
+                       {/* Preview */}
+                       <div>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Preview</label>
+                          <div className={`p-4 rounded-lg border ${theme === 'Midnight' ? 'bg-slate-900 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
+                             <span
+                                className="inline-block px-3 py-1.5 rounded-md text-sm font-medium"
+                                style={{ backgroundColor: newTaskColor, color: '#ffffff' }}
+                             >
+                                {newTaskName || 'Task Name'}
+                             </span>
+                          </div>
+                       </div>
+                    </div>
+
+                    {/* Modal Footer */}
+                    <div className={`px-6 py-4 border-t flex justify-end gap-3 ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                       <button
+                          onClick={() => setShowAddTaskModal(false)}
+                          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                             theme === 'Midnight'
+                                ? 'text-slate-300 hover:bg-slate-700'
+                                : 'text-gray-600 hover:bg-gray-100'
+                          }`}
+                       >
+                          Cancel
+                       </button>
+                       <button
+                          onClick={handleAddNewTask}
+                          disabled={!newTaskName.trim()}
+                          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                             !newTaskName.trim()
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : theme === 'Midnight'
+                                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                                   : 'bg-blue-600 hover:bg-blue-500 text-white'
+                          }`}
+                       >
+                          Create Task
+                       </button>
+                    </div>
+                 </div>
+              </div>
+           )}
+
+           {/* Apply Palette to Tasks Modal */}
+           {showApplyPaletteModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowApplyPaletteModal(false)}>
+                 <div
+                    className={`w-full max-w-lg mx-4 rounded-2xl shadow-2xl max-h-[80vh] flex flex-col ${
+                       theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : 'bg-white'
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                 >
+                    {/* Modal Header */}
+                    <div className={`px-6 py-4 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                       <div className="flex items-center justify-between">
+                          <h3 className={`text-lg font-bold ${styles.text}`}>Apply "{activePalette.name}" to All Tasks?</h3>
+                          <button
+                             onClick={() => setShowApplyPaletteModal(false)}
+                             className={`p-1.5 rounded-lg transition-colors ${
+                                theme === 'Midnight' ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-gray-100 text-gray-500'
+                             }`}
+                          >
+                             <X className="w-5 h-5" />
+                          </button>
+                       </div>
+                    </div>
+
+                    {/* Modal Body */}
+                    <div className="px-6 py-5 space-y-5 overflow-y-auto flex-1">
+                       <p className={`text-sm ${styles.muted}`}>
+                          This will update colors for <span className="font-semibold">{tasks.length} tasks</span> to match the selected palette.
+                       </p>
+
+                       {/* Preview */}
+                       <div className="space-y-3">
+                          <h4 className={`text-sm font-semibold ${styles.text}`}>Preview Changes:</h4>
+                          <div className={`rounded-xl border overflow-hidden ${
+                             theme === 'Midnight' ? 'bg-slate-900/50 border-slate-700' : 'bg-gray-50 border-gray-200'
+                          }`}>
+                             <div className={`grid grid-cols-[1fr_auto_auto_1fr] gap-2 px-4 py-2 text-xs font-medium border-b ${
+                                theme === 'Midnight' ? 'bg-slate-800 border-slate-700 text-slate-400' : 'bg-gray-100 border-gray-200 text-gray-500'
+                             }`}>
+                                <span>Task</span>
+                                <span>Current</span>
+                                <span></span>
+                                <span>New</span>
+                             </div>
+                             <div className="divide-y divide-gray-100 dark:divide-slate-700 max-h-48 overflow-y-auto">
+                                {(() => {
+                                   // Compute Delta E aware preview mapping (STRICT - same algorithm as Apply button)
+                                   // TC tasks (Process, People, Off Process) are excluded - they have fixed colors
+                                   const previewAssignments = new Map<string, number>();
+                                   const assignedColors: string[] = [];
+                                   const usedIndices = new Set<number>();
+                                   const usageCount = new Map<number, number>();
+                                   const paletteSize = activePalette.colors.length;
+
+                                   // Only process REGULAR tasks (exclude TC tasks)
+                                   const regularTasksPreview = tasks.filter(t => !isTCTask(t));
+
+                                   // Sort tasks by closest match to prioritize similar colors
+                                   const taskColorMapping = regularTasksPreview.map(task => ({
+                                      task,
+                                      closestIndex: findClosestPaletteIndex(task.color, activePalette),
+                                      originalColor: task.color
+                                   })).sort((a, b) => a.closestIndex - b.closestIndex);
+
+                                   // Process each REGULAR task with STRICT unique color assignment
+                                   taskColorMapping.forEach(({ task, closestIndex, originalColor }) => {
+                                      const preferredHex = activePalette.colors[closestIndex].hex;
+                                      let selectedIndex = closestIndex;
+                                      let selectedHex = preferredHex;
+
+                                      const indexAlreadyUsed = usedIndices.has(closestIndex);
+                                      const hasDeltaEConflict = assignedColors.some(
+                                         ah => calculateDeltaEHex(preferredHex, ah) < MIN_DELTA_E_THRESHOLD
+                                      );
+
+                                      if (indexAlreadyUsed || hasDeltaEConflict) {
+                                         const unusedIndices: number[] = [];
+                                         for (let i = 0; i < paletteSize; i++) {
+                                            if (!usedIndices.has(i)) unusedIndices.push(i);
+                                         }
+
+                                         if (unusedIndices.length > 0) {
+                                            const accessibleUnused = unusedIndices.filter(i => {
+                                               const hex = activePalette.colors[i].hex;
+                                               return assignedColors.every(ah => calculateDeltaEHex(hex, ah) >= MIN_DELTA_E_THRESHOLD);
+                                            });
+
+                                            if (accessibleUnused.length > 0) {
+                                               let bestDelta = Infinity;
+                                               accessibleUnused.forEach(i => {
+                                                  const delta = calculateDeltaEHex(activePalette.colors[i].hex, originalColor);
+                                                  if (delta < bestDelta) { bestDelta = delta; selectedIndex = i; }
+                                               });
+                                            } else {
+                                               let maxMinDeltaE = -1;
+                                               unusedIndices.forEach(i => {
+                                                  const candidateHex = activePalette.colors[i].hex;
+                                                  let minDeltaE = assignedColors.length > 0 ? Infinity : 100;
+                                                  assignedColors.forEach(ah => {
+                                                     const d = calculateDeltaEHex(candidateHex, ah);
+                                                     if (d < minDeltaE) minDeltaE = d;
+                                                  });
+                                                  if (minDeltaE > maxMinDeltaE) { maxMinDeltaE = minDeltaE; selectedIndex = i; }
+                                               });
+                                            }
+                                            selectedHex = activePalette.colors[selectedIndex].hex;
+                                         } else {
+                                            // ALL colors used - pick LEAST used, with max Delta E from recent as tie-breaker
+                                            const minUsage = Math.min(...Array.from({ length: paletteSize }, (_, i) => usageCount.get(i) || 0));
+                                            const leastUsedIndices = Array.from({ length: paletteSize }, (_, i) => i)
+                                               .filter(i => (usageCount.get(i) || 0) === minUsage);
+                                            let maxMinDeltaE = -1;
+                                            const recentColors = assignedColors.slice(-5);
+                                            leastUsedIndices.forEach(i => {
+                                               const candidateHex = activePalette.colors[i].hex;
+                                               let minDeltaE = recentColors.length > 0 ? Infinity : 100;
+                                               recentColors.forEach(ah => {
+                                                  const d = calculateDeltaEHex(candidateHex, ah);
+                                                  if (d < minDeltaE) minDeltaE = d;
+                                               });
+                                               if (minDeltaE > maxMinDeltaE) { maxMinDeltaE = minDeltaE; selectedIndex = i; }
+                                            });
+                                            selectedHex = activePalette.colors[selectedIndex].hex;
+                                         }
+                                      }
+
+                                      previewAssignments.set(task.id, selectedIndex);
+                                      assignedColors.push(selectedHex);
+                                      usedIndices.add(selectedIndex);
+                                      usageCount.set(selectedIndex, (usageCount.get(selectedIndex) || 0) + 1);
+                                   });
+
+                                   return tasks.slice(0, 8).map((task) => {
+                                      const currentColor = task.color;
+                                      const tcFixedColor = getTCFixedColor(task);
+
+                                      // TC tasks show fixed color, regular tasks show palette assignment
+                                      if (tcFixedColor) {
+                                         return (
+                                            <div key={task.id} className="grid grid-cols-[1fr_auto_auto_1fr] gap-2 px-4 py-2 items-center">
+                                               <span className={`text-sm truncate ${styles.text}`}>{task.name}</span>
+                                               <div
+                                                  className="w-6 h-6 rounded-md shadow-sm"
+                                                  style={{ backgroundColor: currentColor }}
+                                                  title={currentColor}
+                                               />
+                                               <span className={`text-xs px-1.5 py-0.5 rounded ${theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+                                                  TC
+                                               </span>
+                                               <div className="flex items-center gap-2">
+                                                  <div
+                                                     className="w-6 h-6 rounded-md shadow-sm"
+                                                     style={{ backgroundColor: tcFixedColor }}
+                                                     title="Fixed TC Color"
+                                                  />
+                                                  <span className={`text-xs ${styles.muted}`}>
+                                                     Fixed
+                                                  </span>
+                                               </div>
+                                            </div>
+                                         );
+                                      }
+
+                                      const newColorIndex = previewAssignments.get(task.id) ?? findClosestPaletteIndex(currentColor, activePalette);
+                                      const newColor = activePalette.colors[newColorIndex];
+                                      const isChanged = currentColor.toLowerCase() !== newColor.hex.toLowerCase();
+
+                                      return (
+                                         <div key={task.id} className="grid grid-cols-[1fr_auto_auto_1fr] gap-2 px-4 py-2 items-center">
+                                            <span className={`text-sm truncate ${styles.text}`}>{task.name}</span>
+                                            <div
+                                               className="w-6 h-6 rounded-md shadow-sm"
+                                               style={{ backgroundColor: currentColor }}
+                                               title={currentColor}
+                                            />
+                                            <ArrowRight className={`w-4 h-4 ${isChanged ? (theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-500') : styles.muted}`} />
+                                            <div className="flex items-center gap-2">
+                                               <div
+                                                  className={`w-6 h-6 rounded-md shadow-sm ${isChanged ? 'ring-2 ring-offset-1' : ''}`}
+                                                  style={{
+                                                     backgroundColor: newColor.hex,
+                                                     ringColor: isChanged ? (theme === 'Midnight' ? '#818cf8' : '#3b82f6') : 'transparent'
+                                                  }}
+                                                  title={newColor.name}
+                                               />
+                                               <span className={`text-xs ${isChanged ? (theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600') : styles.muted}`}>
+                                                  {newColor.name}
+                                               </span>
+                                            </div>
+                                         </div>
+                                      );
+                                   });
+                                })()}
+                                {tasks.length > 8 && (
+                                   <div className={`px-4 py-2 text-sm ${styles.muted}`}>
+                                      ...and {tasks.length - 8} more tasks (TC tasks excluded from palette)
+                                   </div>
+                                )}
+                             </div>
+                          </div>
+                       </div>
+
+                       {/* Warning */}
+                       <div className={`flex items-start gap-3 p-3 rounded-lg ${
+                          theme === 'Midnight' ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'
+                       }`}>
+                          <AlertTriangle className={`w-5 h-5 shrink-0 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
+                          <p className={`text-sm ${theme === 'Midnight' ? 'text-amber-200' : 'text-amber-800'}`}>
+                             Custom colors will be mapped to the nearest palette color. This action cannot be undone.
+                          </p>
+                       </div>
+                    </div>
+
+                    {/* Modal Footer */}
+                    <div className={`px-6 py-4 border-t flex justify-end gap-3 ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                       <button
+                          onClick={() => setShowApplyPaletteModal(false)}
+                          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                             theme === 'Midnight'
+                                ? 'text-slate-300 hover:bg-slate-700'
+                                : 'text-gray-600 hover:bg-gray-100'
+                          }`}
+                       >
+                          Cancel
+                       </button>
+                       <button
+                          onClick={() => {
+                             // Apply palette colors with STRICT Delta E accessibility checking
+                             // Rule 0: TC tasks (Process, People, Off Process) keep FIXED colors - never change
+                             // Rule 1: NEVER assign the same color to two tasks until ALL palette colors are used
+                             // Rule 2: When all colors used, reuse the one with MAXIMUM Delta E from assigned colors
+                             // Rule 3: Prioritize colors meeting Delta E ≥ 25 threshold
+
+                             // Separate TC tasks from regular tasks
+                             const regularTasks = tasks.filter(t => !isTCTask(t));
+                             const tcTasks = tasks.filter(t => isTCTask(t));
+
+                             console.log('=== APPLY PALETTE DEBUG ===');
+                             console.log('Palette:', activePalette.name, 'with', activePalette.colors.length, 'colors');
+                             console.log('Regular tasks to process:', regularTasks.length);
+                             console.log('TC tasks (fixed colors):', tcTasks.length);
+
+                             const finalAssignments = new Map<string, number>(); // taskId -> colorIndex
+                             const assignedColors: string[] = []; // Track assigned hex colors for Delta E checking
+                             const usedIndices = new Set<number>(); // Track used palette indices (STRICT - no duplicates)
+                             const usageCount = new Map<number, number>(); // Track how many times each index is used (for reuse scenarios)
+
+                             // Sort REGULAR tasks by their original color's closest match to prioritize similar colors together
+                             const taskColorMapping = regularTasks.map(task => ({
+                                task,
+                                closestIndex: findClosestPaletteIndex(task.color, activePalette),
+                                originalColor: task.color
+                             })).sort((a, b) => a.closestIndex - b.closestIndex);
+
+                             const paletteSize = activePalette.colors.length;
+
+                             // Process each task with STRICT unique color assignment
+                             taskColorMapping.forEach(({ task, closestIndex, originalColor }, idx) => {
+                                const preferredHex = activePalette.colors[closestIndex].hex;
+                                let selectedIndex = closestIndex;
+                                let selectedHex = preferredHex;
+
+                                // STRICT: Check if this palette index is already used
+                                const indexAlreadyUsed = usedIndices.has(closestIndex);
+
+                                // Also check Delta E conflict with assigned colors
+                                const hasDeltaEConflict = assignedColors.some(
+                                   assignedHex => calculateDeltaEHex(preferredHex, assignedHex) < MIN_DELTA_E_THRESHOLD
+                                );
+
+                                console.log(`[${idx}] Task: ${task.name}, closestIndex: ${closestIndex}, indexAlreadyUsed: ${indexAlreadyUsed}, hasDeltaEConflict: ${hasDeltaEConflict}`);
+                                console.log(`    usedIndices before:`, Array.from(usedIndices));
+
+                                if (indexAlreadyUsed || hasDeltaEConflict) {
+                                   // Need to find an alternative color
+
+                                   // Step 1: Find all UNUSED indices
+                                   const unusedIndices: number[] = [];
+                                   for (let i = 0; i < paletteSize; i++) {
+                                      if (!usedIndices.has(i)) {
+                                         unusedIndices.push(i);
+                                      }
+                                   }
+
+                                   if (unusedIndices.length > 0) {
+                                      // Step 2: Among unused, find those meeting Delta E threshold
+                                      const accessibleUnused = unusedIndices.filter(i => {
+                                         const hex = activePalette.colors[i].hex;
+                                         return assignedColors.every(
+                                            ah => calculateDeltaEHex(hex, ah) >= MIN_DELTA_E_THRESHOLD
+                                         );
+                                      });
+
+                                      if (accessibleUnused.length > 0) {
+                                         // Pick the one closest to original color (prefer visual similarity)
+                                         let bestDelta = Infinity;
+                                         accessibleUnused.forEach(i => {
+                                            const delta = calculateDeltaEHex(activePalette.colors[i].hex, originalColor);
+                                            if (delta < bestDelta) {
+                                               bestDelta = delta;
+                                               selectedIndex = i;
+                                            }
+                                         });
+                                      } else {
+                                         // No unused colors meet threshold - pick unused with MAX min-Delta E
+                                         let maxMinDeltaE = -1;
+                                         unusedIndices.forEach(i => {
+                                            const candidateHex = activePalette.colors[i].hex;
+                                            let minDeltaE = assignedColors.length > 0 ? Infinity : 100;
+                                            assignedColors.forEach(ah => {
+                                               const d = calculateDeltaEHex(candidateHex, ah);
+                                               if (d < minDeltaE) minDeltaE = d;
+                                            });
+                                            if (minDeltaE > maxMinDeltaE) {
+                                               maxMinDeltaE = minDeltaE;
+                                               selectedIndex = i;
+                                            }
+                                         });
+                                      }
+                                      selectedHex = activePalette.colors[selectedIndex].hex;
+                                   } else {
+                                      // ALL palette colors used - must reuse (14 tasks > 12 colors)
+                                      // Strategy: Pick the LEAST used color, with tie-breaker being max Delta E from recent colors
+                                      const minUsageCount = Math.min(...Array.from({ length: paletteSize }, (_, i) => usageCount.get(i) || 0));
+                                      const leastUsedIndices = Array.from({ length: paletteSize }, (_, i) => i)
+                                         .filter(i => (usageCount.get(i) || 0) === minUsageCount);
+
+                                      // Among least used, pick one with max Delta E from recently assigned colors
+                                      let maxMinDeltaE = -1;
+                                      const recentColors = assignedColors.slice(-5); // Check against last 5 assigned colors
+                                      leastUsedIndices.forEach(i => {
+                                         const candidateHex = activePalette.colors[i].hex;
+                                         let minDeltaE = recentColors.length > 0 ? Infinity : 100;
+                                         recentColors.forEach(ah => {
+                                            const d = calculateDeltaEHex(candidateHex, ah);
+                                            if (d < minDeltaE) minDeltaE = d;
+                                         });
+                                         if (minDeltaE > maxMinDeltaE) {
+                                            maxMinDeltaE = minDeltaE;
+                                            selectedIndex = i;
+                                         }
+                                      });
+                                      selectedHex = activePalette.colors[selectedIndex].hex;
+                                      console.log(`    REUSE: Picked index ${selectedIndex} (usage: ${usageCount.get(selectedIndex) || 0}, minUsage: ${minUsageCount})`);
+                                   }
+                                }
+
+                                // Assign the color
+                                console.log(`    FINAL: ${task.name} -> index ${selectedIndex} (${activePalette.colors[selectedIndex].name})`);
+                                finalAssignments.set(task.id, selectedIndex);
+                                assignedColors.push(selectedHex);
+                                usedIndices.add(selectedIndex);
+                                usageCount.set(selectedIndex, (usageCount.get(selectedIndex) || 0) + 1);
+                             });
+
+                             console.log('=== FINAL ASSIGNMENTS ===');
+                             finalAssignments.forEach((idx, taskId) => {
+                                const taskName = tasks.find(t => t.id === taskId)?.name || taskId;
+                                console.log(`${taskName}: index ${idx} = ${activePalette.colors[idx].hex}`);
+                             });
+                             console.log('TC tasks (fixed):', tcTasks.map(t => `${t.name}: ${getTCFixedColor(t)}`));
+
+                             // Apply the final assignments
+                             // TC tasks get their FIXED colors, regular tasks get palette colors
+                             const updatedTasks = tasks.map(task => {
+                                // TC tasks always use fixed colors - never change with palette
+                                const tcColor = getTCFixedColor(task);
+                                if (tcColor) {
+                                   return { ...task, color: tcColor, textColor: getContrastTextColor(tcColor) };
+                                }
+                                // Regular tasks get palette assignment
+                                const colorIndex = finalAssignments.get(task.id) ?? findClosestPaletteIndex(task.color, activePalette);
+                                const newColor = activePalette.colors[colorIndex].hex;
+                                return { ...task, color: newColor, textColor: getContrastTextColor(newColor) };
+                             });
+
+                             setTasks(updatedTasks);
+                             saveTasks(updatedTasks);
+                             setShowApplyPaletteModal(false);
+                             toast.success(`Applied "${activePalette.name}" palette to ${regularTasks.length} tasks (TC tasks unchanged)`);
+                          }}
+                          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                             theme === 'Midnight'
+                                ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white'
+                          }`}
+                       >
+                          Apply to All Tasks
+                       </button>
+                    </div>
+                 </div>
+              </div>
+           )}
+
+           {/* Staffing Requirements Tab */}
            {settingsTab === 'requirements' && (
               <TaskRequirementsSettings
                 tasks={tasks}
@@ -2353,6 +5258,57 @@ function App() {
                    </p>
                 </div>
 
+                {/* V2 Algorithm Toggle - Experimental */}
+                <div className={`p-5 rounded-2xl border-2 mb-6 ${
+                  schedulingRules.useV2Algorithm
+                    ? theme === 'Midnight' ? 'bg-indigo-900/30 border-indigo-500' : 'bg-blue-50 border-blue-400'
+                    : theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'
+                }`}>
+                  <div className="flex items-start justify-between">
+                    <div className="pr-8">
+                      <div className="flex items-center gap-2">
+                        <h3 className={`font-bold text-base ${styles.text}`}>V2 Algorithm (Experimental)</h3>
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                          theme === 'Midnight' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'
+                        }`}>BETA</span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Enhanced scheduling with decay scoring, Flex priority, skill variety optimization, and early filtering.
+                      </p>
+                      {schedulingRules.useV2Algorithm && (
+                        <div className={`mt-3 p-3 rounded-lg text-xs ${
+                          theme === 'Midnight' ? 'bg-slate-900/50 text-slate-300' : 'bg-white text-gray-600'
+                        }`}>
+                          <strong>V2 Features:</strong> Decay penalties for rotation | Coordinators fully isolated | Skill variety optimization | Explicit Flex scoring
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative flex items-center shrink-0">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={schedulingRules.useV2Algorithm}
+                        onClick={() => setSchedulingRules(prev => ({ ...prev, useV2Algorithm: !prev.useV2Algorithm }))}
+                        className={`group relative w-14 h-8 rounded-full cursor-pointer transition-all duration-300 ease-out focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                          theme === 'Midnight' ? 'focus:ring-indigo-500 focus:ring-offset-slate-800' : 'focus:ring-blue-500 focus:ring-offset-white'
+                        } ${
+                          schedulingRules.useV2Algorithm
+                            ? theme === 'Midnight' ? 'bg-indigo-500' : 'bg-blue-600'
+                            : theme === 'Midnight' ? 'bg-slate-950' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow-lg transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
+                            schedulingRules.useV2Algorithm
+                              ? 'left-7 scale-105'
+                              : 'left-1 scale-100'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   {[
                     { key: 'autoAssignCoordinators', title: 'Auto-assign Team Coordinators (TC)', desc: 'Include coordinators in Smart Fill for Process, People, and Off-Process tasks.' },
@@ -2360,31 +5316,56 @@ function App() {
                     { key: 'prioritizeFlexForExceptions', title: 'Prioritize Flex staff for "Exceptions"', desc: 'Fill Exceptions role with Flex staff first before assigning Regular staff.' },
                     { key: 'respectPreferredStations', title: 'Respect "Preferred" Stations', desc: 'Try to assign operators to their favorite spots based on historical data.' },
                     { key: 'strictSkillMatching', title: 'Strict Skill Matching', desc: 'Never assign a task if operator is missing the required skill.' },
-                    { key: 'fairDistribution', title: 'Fair Distribution', desc: 'Spread heavy tasks (Troubleshooter, Exceptions) evenly across team members.' },
-                    { key: 'balanceWorkload', title: 'Balance Workload', desc: 'Ensure similar shift counts per operator per week.' },
-                  ].map((rule) => (
-                     <div key={rule.key} className={`flex items-start justify-between p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                    { key: 'fairDistribution', title: 'Fair Distribution', desc: 'Spread heavy tasks (Troubleshooter, Exceptions) evenly across team members.', disabledForMultiObj: true },
+                    { key: 'balanceWorkload', title: 'Balance Workload', desc: 'Ensure similar shift counts per operator per week.', disabledForMultiObj: true },
+                    { key: 'prioritizeSkillVariety', title: 'Prioritize Skill Variety (V2)', desc: 'Spread operator assignments across all their skills to build experience variety.', v2Only: true },
+                  ].filter((rule) => !rule.v2Only || schedulingRules.useV2Algorithm).map((rule) => {
+                     const isDisabled = rule.disabledForMultiObj && schedulingRules.algorithm === 'multi-objective';
+                     return (
+                     <div key={rule.key} className={`flex items-start justify-between p-5 rounded-2xl border transition-all ${
+                        isDisabled
+                           ? theme === 'Midnight' ? 'bg-slate-900/50 border-slate-700/50 opacity-50' : 'bg-gray-100/50 border-gray-200/50 opacity-50'
+                           : theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'
+                     }`}>
                         <div className="pr-8">
-                           <h3 className={`font-bold text-base ${styles.text}`}>{rule.title}</h3>
-                           <p className="text-sm text-gray-500 mt-1">{rule.desc}</p>
+                           <h3 className={`font-bold text-base ${styles.text} ${isDisabled ? 'line-through' : ''}`}>{rule.title}</h3>
+                           <p className="text-sm text-gray-500 mt-1">
+                              {isDisabled
+                                 ? 'Handled automatically by Multi-Objective algorithm'
+                                 : rule.desc
+                              }
+                           </p>
                         </div>
-                        <div className="relative flex items-center shrink-0">
-                           <input
-                              type="checkbox"
-                              checked={schedulingRules[rule.key as keyof SchedulingRules] as boolean}
-                              onChange={(e) => setSchedulingRules(prev => ({ ...prev, [rule.key]: e.target.checked }))}
-                              className="peer sr-only"
-                              id={`rule-${rule.key}`}
-                           />
-                           <label
-                              htmlFor={`rule-${rule.key}`}
-                              className={`block w-14 h-8 rounded-full cursor-pointer transition-colors ${theme === 'Midnight' ? 'bg-slate-950 peer-checked:bg-indigo-500' : 'bg-gray-300 peer-checked:bg-blue-600'}`}
+                        <div className={`relative flex items-center shrink-0 ${isDisabled ? 'pointer-events-none' : ''}`}>
+                           <button
+                              type="button"
+                              role="switch"
+                              aria-checked={schedulingRules[rule.key as keyof SchedulingRules] as boolean}
+                              onClick={() => !isDisabled && setSchedulingRules(prev => ({ ...prev, [rule.key]: !prev[rule.key as keyof SchedulingRules] }))}
+                              disabled={isDisabled}
+                              className={`group relative w-14 h-8 rounded-full cursor-pointer transition-all duration-300 ease-out focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                                 theme === 'Midnight' ? 'focus:ring-indigo-500 focus:ring-offset-slate-800' : 'focus:ring-blue-500 focus:ring-offset-white'
+                              } ${
+                                 schedulingRules[rule.key as keyof SchedulingRules]
+                                    ? theme === 'Midnight' ? 'bg-indigo-500' : 'bg-blue-600'
+                                    : theme === 'Midnight' ? 'bg-slate-950' : 'bg-gray-300'
+                              }`}
                            >
-                              <span className="absolute left-1 top-1 w-6 h-6 bg-white rounded-full shadow-md transition-all peer-checked:left-7"></span>
-                           </label>
+                              <span
+                                 className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow-lg transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
+                                    schedulingRules[rule.key as keyof SchedulingRules]
+                                       ? 'left-7 scale-105'
+                                       : 'left-1 scale-100'
+                                 }`}
+                              />
+                              {/* Subtle pulse when active */}
+                              {schedulingRules[rule.key as keyof SchedulingRules] && (
+                                 <span className="absolute inset-0 rounded-full animate-ping opacity-20 bg-current" style={{ animationDuration: '2s', animationIterationCount: '1' }} />
+                              )}
+                           </button>
                         </div>
                      </div>
-                  ))}
+                  )})}
 
                   {/* Max consecutive days setting */}
                   <div className={`flex items-start justify-between p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
@@ -2406,13 +5387,19 @@ function App() {
                   </div>
 
                   {/* Randomization factor slider */}
-                  <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                  <div className={`p-5 rounded-2xl border transition-all ${
+                     schedulingRules.algorithm === 'multi-objective'
+                        ? theme === 'Midnight' ? 'bg-slate-900/50 border-slate-700/50 opacity-50' : 'bg-gray-100/50 border-gray-200/50 opacity-50'
+                        : theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'
+                  }`}>
                      <div className="flex items-start justify-between mb-4">
                         <div className="pr-8">
-                           <h3 className={`font-bold text-base ${styles.text}`}>Schedule Variety</h3>
+                           <h3 className={`font-bold text-base ${styles.text} ${schedulingRules.algorithm === 'multi-objective' ? 'line-through' : ''}`}>Schedule Variety</h3>
                            <p className="text-sm text-gray-500 mt-1">
-                              Add randomization to Smart Fill so each week generates a different schedule.
-                              Higher values create more variety, lower values are more consistent.
+                              {schedulingRules.algorithm === 'multi-objective'
+                                 ? 'Multi-Objective algorithm explores multiple randomization levels automatically (0%, 5%, 10%, 15%, 20%)'
+                                 : 'Add randomization to Smart Fill so each week generates a different schedule. Higher values create more variety, lower values are more consistent.'
+                              }
                            </p>
                         </div>
                         <span className={`px-3 py-1 rounded-lg font-bold text-sm shrink-0 ${
@@ -2429,7 +5416,7 @@ function App() {
                             schedulingRules.randomizationFactor <= 14 ? 'Medium' : 'High'}
                         </span>
                      </div>
-                     <div className="flex items-center gap-4">
+                     <div className={`flex items-center gap-4 ${schedulingRules.algorithm === 'multi-objective' ? 'pointer-events-none' : ''}`}>
                         <span className={`text-xs ${styles.muted}`}>Consistent</span>
                         <input
                            type="range"
@@ -2437,12 +5424,364 @@ function App() {
                            max="20"
                            value={schedulingRules.randomizationFactor}
                            onChange={(e) => setSchedulingRules(prev => ({ ...prev, randomizationFactor: parseInt(e.target.value, 10) }))}
+                           disabled={schedulingRules.algorithm === 'multi-objective'}
                            className={`flex-1 h-2 rounded-full appearance-none cursor-pointer ${
                               theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-200'
                            } [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-md`}
                         />
                         <span className={`text-xs ${styles.muted}`}>Varied</span>
                      </div>
+                  </div>
+
+                  {/* Task Categories for Consecutive Day Rules */}
+                  <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                     <div className="mb-4">
+                        <h3 className={`font-bold text-base ${styles.text}`}>Task Categories</h3>
+                        <p className="text-sm text-gray-500 mt-1">
+                           Configure which tasks are "Heavy" (max 1 consecutive day) or "Soft" (max 2 consecutive days). All other tasks default to 1 day max.
+                        </p>
+                     </div>
+
+                     {/* Heavy Tasks */}
+                     <div className="mb-4">
+                        <div className="flex items-center gap-2 mb-2">
+                           <span className={`px-2 py-1 rounded text-xs font-bold ${theme === 'Midnight' ? 'bg-red-500/20 text-red-400' : 'bg-red-100 text-red-600'}`}>
+                              Heavy
+                           </span>
+                           <span className="text-xs text-gray-500">Max 1 consecutive day</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                           {tasks.filter(t => !TC_SKILLS.includes(t.requiredSkill)).map(task => {
+                              const isHeavy = schedulingRules.heavyTasks?.includes(task.name);
+                              const isSoft = schedulingRules.softTasks?.includes(task.name);
+                              if (isSoft) return null; // Can't be both
+                              return (
+                                 <button
+                                    key={task.id}
+                                    onClick={() => {
+                                       setSchedulingRules(prev => ({
+                                          ...prev,
+                                          heavyTasks: isHeavy
+                                             ? prev.heavyTasks?.filter(t => t !== task.name) ?? []
+                                             : [...(prev.heavyTasks ?? []), task.name]
+                                       }));
+                                    }}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                       isHeavy
+                                          ? theme === 'Midnight'
+                                             ? 'bg-red-500/30 text-red-300 ring-2 ring-red-500/50'
+                                             : 'bg-red-100 text-red-700 ring-2 ring-red-300'
+                                          : theme === 'Midnight'
+                                             ? 'bg-slate-900 text-slate-400 hover:bg-slate-700'
+                                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    }`}
+                                 >
+                                    {task.name}
+                                 </button>
+                              );
+                           })}
+                        </div>
+                     </div>
+
+                     {/* Soft Tasks */}
+                     <div>
+                        <div className="flex items-center gap-2 mb-2">
+                           <span className={`px-2 py-1 rounded text-xs font-bold ${theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-600'}`}>
+                              Soft
+                           </span>
+                           <span className="text-xs text-gray-500">Max 2 consecutive days</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                           {tasks.filter(t => !TC_SKILLS.includes(t.requiredSkill)).map(task => {
+                              const isHeavy = schedulingRules.heavyTasks?.includes(task.name);
+                              const isSoft = schedulingRules.softTasks?.includes(task.name);
+                              if (isHeavy) return null; // Can't be both
+                              return (
+                                 <button
+                                    key={task.id}
+                                    onClick={() => {
+                                       setSchedulingRules(prev => ({
+                                          ...prev,
+                                          softTasks: isSoft
+                                             ? prev.softTasks?.filter(t => t !== task.name) ?? []
+                                             : [...(prev.softTasks ?? []), task.name]
+                                       }));
+                                    }}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                       isSoft
+                                          ? theme === 'Midnight'
+                                             ? 'bg-amber-500/30 text-amber-300 ring-2 ring-amber-500/50'
+                                             : 'bg-amber-100 text-amber-700 ring-2 ring-amber-300'
+                                          : theme === 'Midnight'
+                                             ? 'bg-slate-900 text-slate-400 hover:bg-slate-700'
+                                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    }`}
+                                 >
+                                    {task.name}
+                                 </button>
+                              );
+                           })}
+                        </div>
+                     </div>
+
+                     <div className={`mt-4 p-3 rounded-lg ${theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-gray-100'}`}>
+                        <p className={`text-xs ${styles.muted}`}>
+                           Tasks not selected in either category are "Normal" (max 1 consecutive day).
+                        </p>
+                     </div>
+                  </div>
+
+                  {/* Fill Gaps Soft Rules */}
+                  <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                     <div className="mb-4">
+                        <div className="flex items-center gap-2 mb-1">
+                           <h3 className={`font-bold text-base ${styles.text}`}>Fill Gaps Rules</h3>
+                           <span className={`px-2 py-0.5 rounded text-xs font-medium ${theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-600'}`}>
+                              Soft
+                           </span>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1">
+                           When filling empty cells, these rules will be tried in order. Rules can be relaxed to fill more cells.
+                        </p>
+                     </div>
+
+                     <div className="space-y-2">
+                        {fillGapsSettings.softRules
+                          .sort((a, b) => a.priority - b.priority)
+                          .map((rule, index) => {
+                            const metadata = SOFT_RULE_METADATA[rule.id];
+                            const IconComponent = rule.id === 'avoid-consecutive-same-task' ? CalendarX2 :
+                                                  rule.id === 'task-variety' ? Shuffle :
+                                                  rule.id === 'workload-balance' ? Scale :
+                                                  AlertTriangle;
+                            return (
+                              <div
+                                key={rule.id}
+                                className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+                                  rule.enabled
+                                    ? theme === 'Midnight'
+                                      ? 'bg-slate-900/50 border-slate-600'
+                                      : 'bg-white border-gray-200'
+                                    : theme === 'Midnight'
+                                      ? 'bg-slate-900/30 border-slate-700 opacity-60'
+                                      : 'bg-gray-50 border-gray-100 opacity-60'
+                                }`}
+                              >
+                                {/* Priority number */}
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                                  rule.enabled
+                                    ? theme === 'Midnight'
+                                      ? 'bg-indigo-500/30 text-indigo-300'
+                                      : 'bg-blue-100 text-blue-600'
+                                    : theme === 'Midnight'
+                                      ? 'bg-slate-700 text-slate-500'
+                                      : 'bg-gray-200 text-gray-400'
+                                }`}>
+                                  {index + 1}
+                                </div>
+
+                                {/* Move buttons */}
+                                <div className="flex flex-col gap-0.5">
+                                  <button
+                                    onClick={() => {
+                                      if (index === 0) return;
+                                      setFillGapsSettings(prev => {
+                                        const sorted = [...prev.softRules].sort((a, b) => a.priority - b.priority);
+                                        const newRules = sorted.map((r, i) => {
+                                          if (i === index) return { ...r, priority: index };
+                                          if (i === index - 1) return { ...r, priority: index + 1 };
+                                          return { ...r, priority: i + 1 };
+                                        });
+                                        return { softRules: newRules };
+                                      });
+                                    }}
+                                    disabled={index === 0}
+                                    className={`p-0.5 rounded transition-colors ${
+                                      index === 0
+                                        ? 'opacity-30 cursor-not-allowed'
+                                        : theme === 'Midnight'
+                                          ? 'hover:bg-slate-700 text-slate-400'
+                                          : 'hover:bg-gray-200 text-gray-500'
+                                    }`}
+                                  >
+                                    <ChevronUp className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (index === fillGapsSettings.softRules.length - 1) return;
+                                      setFillGapsSettings(prev => {
+                                        const sorted = [...prev.softRules].sort((a, b) => a.priority - b.priority);
+                                        const newRules = sorted.map((r, i) => {
+                                          if (i === index) return { ...r, priority: index + 2 };
+                                          if (i === index + 1) return { ...r, priority: index + 1 };
+                                          return { ...r, priority: i + 1 };
+                                        });
+                                        return { softRules: newRules };
+                                      });
+                                    }}
+                                    disabled={index === fillGapsSettings.softRules.length - 1}
+                                    className={`p-0.5 rounded transition-colors ${
+                                      index === fillGapsSettings.softRules.length - 1
+                                        ? 'opacity-30 cursor-not-allowed'
+                                        : theme === 'Midnight'
+                                          ? 'hover:bg-slate-700 text-slate-400'
+                                          : 'hover:bg-gray-200 text-gray-500'
+                                    }`}
+                                  >
+                                    <ChevronDown className="w-3 h-3" />
+                                  </button>
+                                </div>
+
+                                {/* Icon */}
+                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                                  rule.enabled
+                                    ? rule.id === 'avoid-consecutive-heavy'
+                                      ? theme === 'Midnight' ? 'bg-amber-500/20' : 'bg-amber-100'
+                                      : theme === 'Midnight' ? 'bg-indigo-500/20' : 'bg-blue-100'
+                                    : theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-200'
+                                }`}>
+                                  <IconComponent className={`w-4 h-4 ${
+                                    rule.enabled
+                                      ? rule.id === 'avoid-consecutive-heavy'
+                                        ? theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                                        : theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600'
+                                      : theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'
+                                  }`} />
+                                </div>
+
+                                {/* Label and description */}
+                                <div className="flex-1 min-w-0">
+                                  <div className={`text-sm font-medium ${
+                                    rule.enabled ? styles.text : styles.muted
+                                  }`}>
+                                    {metadata.label}
+                                  </div>
+                                  <div className={`text-xs ${styles.muted} truncate`}>
+                                    {metadata.description}
+                                  </div>
+                                </div>
+
+                                {/* Toggle */}
+                                <button
+                                  onClick={() => {
+                                    setFillGapsSettings(prev => ({
+                                      softRules: prev.softRules.map(r =>
+                                        r.id === rule.id ? { ...r, enabled: !r.enabled } : r
+                                      )
+                                    }));
+                                  }}
+                                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                                    rule.enabled
+                                      ? theme === 'Midnight' ? 'bg-indigo-600' : 'bg-blue-600'
+                                      : theme === 'Midnight' ? 'bg-slate-600' : 'bg-gray-300'
+                                  }`}
+                                >
+                                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+                                    rule.enabled ? 'left-6' : 'left-1'
+                                  }`} />
+                                </button>
+                              </div>
+                            );
+                          })
+                        }
+                     </div>
+
+                     <div className={`mt-4 p-3 rounded-lg ${theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-gray-100'}`}>
+                        <p className={`text-xs ${styles.muted}`}>
+                           <strong>How it works:</strong> Fill Gaps first tries to fill cells respecting all enabled rules.
+                           If a cell cannot be filled, rules are relaxed in order (highest priority first) until an assignment is possible.
+                           Skill matching is always enforced and cannot be relaxed.
+                        </p>
+                     </div>
+                  </div>
+
+                  {/* Algorithm Selection */}
+                  <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                     <div className="mb-4">
+                        <h3 className={`font-bold text-base ${styles.text}`}>Scheduling Algorithm</h3>
+                        <p className="text-sm text-gray-500 mt-1">
+                           Choose which optimization algorithm to use when generating schedules.
+                        </p>
+                     </div>
+                     <div className="space-y-3">
+                        {[
+                           {
+                              value: 'greedy' as const,
+                              label: 'Standard',
+                              desc: 'Fast and reliable (recommended for most cases)',
+                              badge: 'Default',
+                              badgeColor: theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-600'
+                           },
+                           {
+                              value: 'greedy-tabu' as const,
+                              label: 'Enhanced',
+                              desc: 'Better quality through iterative refinement (~5-10% improvement)',
+                              badge: 'Slower',
+                              badgeColor: theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+                           },
+                           {
+                              value: 'multi-objective' as const,
+                              label: 'Multi-Objective',
+                              desc: 'Generates multiple options to explore trade-offs',
+                              badge: 'Advanced',
+                              badgeColor: theme === 'Midnight' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-600'
+                           }
+                        ].map((algo) => (
+                           <div
+                              key={algo.value}
+                              onClick={() => setSchedulingRules(prev => ({ ...prev, algorithm: algo.value }))}
+                              className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                                 schedulingRules.algorithm === algo.value
+                                    ? theme === 'Midnight'
+                                       ? 'border-indigo-500 bg-indigo-500/10'
+                                       : 'border-blue-500 bg-blue-50'
+                                    : theme === 'Midnight'
+                                       ? 'border-slate-700 hover:border-slate-600 bg-slate-900/50'
+                                       : 'border-gray-200 hover:border-gray-300 bg-white'
+                              }`}
+                           >
+                              <div className="flex items-start justify-between">
+                                 <div className="flex items-center gap-3">
+                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                                       schedulingRules.algorithm === algo.value
+                                          ? theme === 'Midnight'
+                                             ? 'border-indigo-500'
+                                             : 'border-blue-500'
+                                          : theme === 'Midnight'
+                                             ? 'border-slate-600'
+                                             : 'border-gray-300'
+                                    }`}>
+                                       {schedulingRules.algorithm === algo.value && (
+                                          <div className={`w-2.5 h-2.5 rounded-full ${
+                                             theme === 'Midnight' ? 'bg-indigo-500' : 'bg-blue-500'
+                                          }`} />
+                                       )}
+                                    </div>
+                                    <div>
+                                       <div className="flex items-center gap-2">
+                                          <span className={`font-bold ${styles.text}`}>{algo.label}</span>
+                                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${algo.badgeColor}`}>
+                                             {algo.badge}
+                                          </span>
+                                       </div>
+                                       <p className="text-sm text-gray-500 mt-0.5">{algo.desc}</p>
+                                    </div>
+                                 </div>
+                              </div>
+                           </div>
+                        ))}
+                     </div>
+                     {schedulingRules.algorithm === 'multi-objective' && (
+                        <div className={`mt-4 p-3 rounded-lg border ${
+                           theme === 'Midnight'
+                              ? 'bg-purple-500/10 border-purple-500/30 text-purple-300'
+                              : 'bg-purple-50 border-purple-200 text-purple-700'
+                        }`}>
+                           <p className="text-xs font-medium">
+                              💡 Multi-Objective mode will present 3-5 different schedule options, each optimizing different priorities (fairness, variety, skill matching). You'll be able to choose which one fits your weekly needs.
+                           </p>
+                        </div>
+                     )}
                   </div>
                </div>
              </div>
@@ -2647,6 +5986,167 @@ function App() {
               </div>
            )}
 
+           {settingsTab === 'feedback' && (
+              <div className="space-y-8">
+                  <div className="mb-6">
+                       <h2 className={`text-xl font-bold ${styles.text}`}>User Feedback</h2>
+                       <p className={`text-sm ${styles.muted}`}>View, manage, and export user-submitted feedback.</p>
+                  </div>
+
+                  {/* Quick Stats */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                     {(['bug', 'feature', 'ui-ux', 'question'] as FeedbackCategory[]).map((cat) => {
+                        const count = feedbackItems.filter(f => f.category === cat).length;
+                        const meta = FEEDBACK_CATEGORIES[cat];
+                        return (
+                           <div key={cat} className={`p-4 rounded-xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                 <span className={`text-xs font-bold uppercase tracking-wide ${styles.muted}`}>{meta.label.split(' ')[0]}</span>
+                                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                                    meta.color === 'red' ? 'bg-red-100 text-red-600' :
+                                    meta.color === 'amber' ? 'bg-amber-100 text-amber-600' :
+                                    meta.color === 'purple' ? 'bg-purple-100 text-purple-600' :
+                                    'bg-blue-100 text-blue-600'
+                                 }`}>{count}</span>
+                              </div>
+                              <p className={`text-2xl font-bold ${styles.text}`}>{count}</p>
+                           </div>
+                        );
+                     })}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-3">
+                     <button
+                        onClick={() => setShowFeedbackModal(true)}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                     >
+                        <Plus className="h-4 w-4" />
+                        New Feedback
+                     </button>
+                     <button
+                        onClick={() => {
+                           const json = JSON.stringify(feedbackItems, null, 2);
+                           const blob = new Blob([json], { type: 'application/json' });
+                           const url = URL.createObjectURL(blob);
+                           const a = document.createElement('a');
+                           a.href = url;
+                           a.download = `feedback-export-${new Date().toISOString().split('T')[0]}.json`;
+                           a.click();
+                           URL.revokeObjectURL(url);
+                           toast.success('Feedback exported successfully');
+                        }}
+                        disabled={feedbackItems.length === 0}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${theme === 'Midnight' ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                     >
+                        <Download className="h-4 w-4" />
+                        Export JSON
+                     </button>
+                     {feedbackItems.length > 0 && (
+                        <button
+                           onClick={handleFeedbackClearAll}
+                           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-red-600/20 hover:bg-red-600/30 text-red-400' : 'bg-red-50 hover:bg-red-100 text-red-600'}`}
+                        >
+                           <Trash2 className="h-4 w-4" />
+                           Clear All
+                        </button>
+                     )}
+                  </div>
+
+                  {/* Feedback List */}
+                  {feedbackLoading ? (
+                     <div className={`p-12 rounded-2xl border-2 border-dashed text-center ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                        <Loader2 className={`h-12 w-12 mx-auto mb-4 animate-spin ${styles.muted}`} />
+                        <h3 className={`text-lg font-bold mb-2 ${styles.text}`}>Loading Feedback...</h3>
+                        <p className={`text-sm ${styles.muted}`}>
+                           {feedbackService.isOnline() ? 'Fetching from cloud storage...' : 'Loading from local storage...'}
+                        </p>
+                     </div>
+                  ) : feedbackItems.length === 0 ? (
+                     <div className={`p-12 rounded-2xl border-2 border-dashed text-center ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                        <Send className={`h-12 w-12 mx-auto mb-4 ${styles.muted}`} />
+                        <h3 className={`text-lg font-bold mb-2 ${styles.text}`}>No Feedback Yet</h3>
+                        <p className={`text-sm ${styles.muted}`}>
+                           User feedback will appear here. Click "New Feedback" or use the feedback button in the sidebar.
+                        </p>
+                     </div>
+                  ) : (
+                     <div className="space-y-4">
+                        {feedbackItems.map((feedback) => {
+                           const categoryMeta = FEEDBACK_CATEGORIES[feedback.category];
+                           const statusMeta = FEEDBACK_STATUSES[feedback.status];
+                           return (
+                              <div
+                                 key={feedback.id}
+                                 className={`p-5 rounded-2xl border transition-all hover:shadow-md ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}
+                              >
+                                 <div className="flex items-start justify-between gap-4">
+                                    <div className="flex-1 min-w-0">
+                                       <div className="flex items-center gap-2 mb-2">
+                                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                                             categoryMeta.color === 'red' ? 'bg-red-100 text-red-600' :
+                                             categoryMeta.color === 'amber' ? 'bg-amber-100 text-amber-600' :
+                                             categoryMeta.color === 'purple' ? 'bg-purple-100 text-purple-600' :
+                                             'bg-blue-100 text-blue-600'
+                                          }`}>{categoryMeta.label}</span>
+                                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                             statusMeta.color === 'emerald' ? 'bg-emerald-100 text-emerald-600' :
+                                             statusMeta.color === 'amber' ? 'bg-amber-100 text-amber-600' :
+                                             statusMeta.color === 'blue' ? 'bg-blue-100 text-blue-600' :
+                                             statusMeta.color === 'purple' ? 'bg-purple-100 text-purple-600' :
+                                             statusMeta.color === 'red' ? 'bg-red-100 text-red-600' :
+                                             'bg-slate-100 text-slate-600'
+                                          }`}>{statusMeta.label}</span>
+                                          {feedback.priority === 'high' && (
+                                             <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600">High Priority</span>
+                                          )}
+                                       </div>
+                                       <h4 className={`font-bold mb-1 ${styles.text}`}>{feedback.title}</h4>
+                                       <p className={`text-sm ${styles.muted} line-clamp-2`}>{feedback.description}</p>
+                                       <div className={`flex items-center gap-4 mt-3 text-xs ${styles.muted}`}>
+                                          <span>{new Date(feedback.createdAt).toLocaleDateString()}</span>
+                                          {feedback.contactEmail && <span>{feedback.contactEmail}</span>}
+                                          {feedback.currentPage && <span>From: {feedback.currentPage}</span>}
+                                       </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                       {/* Status Dropdown */}
+                                       <select
+                                          value={feedback.status}
+                                          onChange={(e) => handleFeedbackStatusChange(feedback.id, e.target.value as FeedbackStatus)}
+                                          className={`text-xs font-medium px-2 py-1.5 rounded-lg border outline-none cursor-pointer ${theme === 'Midnight' ? 'bg-slate-900 border-slate-600 text-slate-300' : 'bg-white border-gray-200 text-gray-700'}`}
+                                       >
+                                          {(Object.keys(FEEDBACK_STATUSES) as FeedbackStatus[]).map((status) => (
+                                             <option key={status} value={status}>{FEEDBACK_STATUSES[status].label}</option>
+                                          ))}
+                                       </select>
+                                       {/* Delete Button */}
+                                       <button
+                                          onClick={() => handleFeedbackDelete(feedback.id)}
+                                          className={`p-2 rounded-lg transition-colors ${theme === 'Midnight' ? 'hover:bg-slate-700 text-slate-400 hover:text-red-400' : 'hover:bg-gray-200 text-gray-400 hover:text-red-500'}`}
+                                       >
+                                          <Trash2 className="h-4 w-4" />
+                                       </button>
+                                    </div>
+                                 </div>
+                                 {feedback.screenshot && (
+                                    <div className="mt-4">
+                                       <img
+                                          src={feedback.screenshot}
+                                          alt="Screenshot"
+                                          className="max-h-40 rounded-lg border border-gray-200 cursor-pointer hover:opacity-80 transition-opacity"
+                                          onClick={() => window.open(feedback.screenshot, '_blank')}
+                                       />
+                                    </div>
+                                 )}
+                              </div>
+                           );
+                        })}
+                     </div>
+                  )}
+              </div>
+           )}
+
         </div>
       </div>
     </div>
@@ -2654,12 +6154,12 @@ function App() {
 
   const renderScheduleView = () => (
     <div className="flex flex-col h-full space-y-3 pb-2">
-      
-      {/* KPI Header */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 no-print">
+
+      {/* KPI Header - Collapsible */}
+      <div className={`transition-all duration-300 ease-in-out overflow-hidden no-print ${isHeaderCollapsed ? 'max-h-0 opacity-0' : 'max-h-96 opacity-100'}`}>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
           { icon: Users, label: 'Workforce', value: stats.totalOperators, color: theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-600', bg: theme === 'Midnight' ? 'bg-indigo-500/10' : 'bg-blue-50' },
-          { icon: CheckCircle2, label: 'Shift Coverage', value: `${stats.coverage}%`, color: theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600', bg: theme === 'Midnight' ? 'bg-emerald-500/10' : 'bg-emerald-50' },
           { icon: Sparkles, label: 'Auto-Assigned', value: currentWeek.days.reduce((acc, d) => acc + (Object.values(d.assignments) as ScheduleAssignment[]).filter(a => !a.locked && a.taskId).length, 0), color: theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600', bg: theme === 'Midnight' ? 'bg-purple-500/10' : 'bg-purple-50' }
         ].map((kpi, idx) => (
            <div key={idx} className={`${styles.card} p-4 flex items-center gap-4`}>
@@ -2672,6 +6172,61 @@ function App() {
               </div>
            </div>
         ))}
+
+        {/* Warnings Card - Dynamic severity-based styling */}
+        <button
+          onClick={() => setShowWarningsModal(true)}
+          className={`p-4 rounded-xl shadow-lg flex items-center gap-4 text-left transition-all hover:scale-[1.02] ${
+            hasCriticalWarnings
+              ? (theme === 'Midnight'
+                  ? 'bg-gradient-to-br from-red-600/30 to-red-700/20 border border-red-500/40 hover:border-red-500/60'
+                  : 'bg-gradient-to-br from-red-100 to-red-50 border border-red-200 hover:border-red-300')
+              : scheduleWarnings.length > 0
+                ? (theme === 'Midnight'
+                    ? 'bg-gradient-to-br from-amber-600/30 to-amber-700/20 border border-amber-500/40 hover:border-amber-500/60'
+                    : 'bg-gradient-to-br from-amber-100 to-amber-50 border border-amber-200 hover:border-amber-300')
+                : (theme === 'Midnight'
+                    ? 'bg-gradient-to-br from-emerald-600/30 to-emerald-700/20 border border-emerald-500/40 hover:border-emerald-500/60'
+                    : 'bg-gradient-to-br from-emerald-100 to-emerald-50 border border-emerald-200 hover:border-emerald-300')
+          }`}
+        >
+          <div className={`p-3 rounded-lg ${
+            hasCriticalWarnings
+              ? (theme === 'Midnight' ? 'bg-red-500/20 text-red-400' : 'bg-red-200/60 text-red-600')
+              : scheduleWarnings.length > 0
+                ? (theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-200/60 text-amber-600')
+                : (theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-200/60 text-emerald-600')
+          }`}>
+            {scheduleWarnings.length > 0 ? (
+              <AlertTriangle className="h-6 w-6" />
+            ) : (
+              <CheckCircle2 className="h-6 w-6" />
+            )}
+          </div>
+          <div>
+            <p className={`text-xs font-medium uppercase tracking-wide ${
+              hasCriticalWarnings
+                ? (theme === 'Midnight' ? 'text-red-400/70' : 'text-red-500/70')
+                : scheduleWarnings.length > 0
+                  ? (theme === 'Midnight' ? 'text-amber-400/70' : 'text-amber-500/70')
+                  : (theme === 'Midnight' ? 'text-emerald-400/70' : 'text-emerald-500/70')
+            }`}>Warnings</p>
+            <p className={`text-2xl font-bold ${
+              hasCriticalWarnings
+                ? (theme === 'Midnight' ? 'text-red-300' : 'text-red-700')
+                : scheduleWarnings.length > 0
+                  ? (theme === 'Midnight' ? 'text-amber-300' : 'text-amber-700')
+                  : (theme === 'Midnight' ? 'text-emerald-300' : 'text-emerald-700')
+            }`}>{scheduleWarnings.length}</p>
+          </div>
+          {scheduleWarnings.length > 0 && (
+            <ChevronRight className={`ml-auto h-5 w-5 ${
+              hasCriticalWarnings
+                ? (theme === 'Midnight' ? 'text-red-400/50' : 'text-red-400')
+                : (theme === 'Midnight' ? 'text-amber-400/50' : 'text-amber-400')
+            }`} />
+          )}
+        </button>
 
         <div className={`p-4 rounded-xl shadow-lg flex flex-col justify-between text-white ${
           currentWeek.status === 'Published'
@@ -2713,38 +6268,9 @@ function App() {
             )}
           </div>
         </div>
+        </div>
       </div>
 
-      {/* Conflict Warnings Panel */}
-      {scheduleWarnings.length > 0 && (
-        <div data-warning-panel className={`rounded-xl border p-4 no-print ${theme === 'Midnight' ? 'bg-amber-900/20 border-amber-900/50' : 'bg-amber-50 border-amber-200'}`}>
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle className={`h-5 w-5 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
-            <h3 className={`font-bold ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-800'}`}>
-              Schedule Warnings ({scheduleWarnings.length})
-            </h3>
-          </div>
-          <div className="space-y-2 max-h-40 overflow-y-auto">
-            {scheduleWarnings.map((warning, idx) => (
-              <div key={idx} className={`flex items-start gap-2 text-sm ${theme === 'Midnight' ? 'text-amber-200' : 'text-amber-700'}`}>
-                <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold shrink-0 ${
-                  warning.type === 'skill_mismatch' ? 'bg-red-500/20 text-red-500' :
-                  warning.type === 'availability_conflict' ? 'bg-orange-500/20 text-orange-500' :
-                  warning.type === 'double_assignment' ? 'bg-purple-500/20 text-purple-500' :
-                  warning.type === 'understaffed' ? 'bg-blue-500/20 text-blue-500' :
-                  'bg-amber-500/20 text-amber-500'
-                }`}>
-                  {warning.type === 'skill_mismatch' ? '!' :
-                   warning.type === 'availability_conflict' ? '⏰' :
-                   warning.type === 'double_assignment' ? '2x' :
-                   warning.type === 'understaffed' ? '-' : '⚠'}
-                </span>
-                <span>{warning.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Main Grid Card */}
       <div ref={scheduleGridRef} id="schedule-grid" className={`flex-1 flex flex-col ${styles.card} overflow-hidden`}>
@@ -2753,6 +6279,27 @@ function App() {
         <div className={`px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 no-print z-20 ${theme === 'Midnight' ? 'border-b border-slate-800' : 'border-b border-gray-100'}`}>
            <div className="flex items-center gap-4">
              <h2 className={`font-bold text-lg ${styles.text}`}>Weekly Assignment</h2>
+
+             {/* Warning Indicator Badge */}
+             {scheduleWarnings.length > 0 && (
+               <button
+                 onClick={() => setShowWarningsModal(true)}
+                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all hover:scale-105 ${
+                   hasCriticalWarnings
+                     ? theme === 'Midnight'
+                       ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/40'
+                       : 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-200'
+                     : theme === 'Midnight'
+                       ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/40'
+                       : 'bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-200'
+                 }`}
+                 title={`${criticalWarnings.length} critical, ${scheduleWarnings.length - criticalWarnings.length} warnings - Click to view`}
+               >
+                 <AlertTriangle className="h-3.5 w-3.5" />
+                 <span>{scheduleWarnings.length}</span>
+               </button>
+             )}
+
              <div className={`hidden sm:block h-4 w-px ${theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-300'}`}></div>
 
              {/* Week Navigation */}
@@ -2803,6 +6350,51 @@ function App() {
              )}
            </div>
 
+           {/* Search Bar - Full Width Filter */}
+           <div className={`flex flex-1 max-w-md items-center gap-2 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl border transition-all ${
+             scheduleSearchFilter
+               ? (theme === 'Midnight'
+                   ? 'bg-indigo-500/10 border-indigo-500/50 ring-2 ring-indigo-500/20'
+                   : 'bg-blue-50 border-blue-300 ring-2 ring-blue-100')
+               : (theme === 'Midnight'
+                   ? 'bg-slate-800/50 border-slate-700 focus-within:border-indigo-500/50 focus-within:ring-2 focus-within:ring-indigo-500/20'
+                   : 'bg-gray-50 border-gray-200 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100')
+           }`}>
+             <Search className={`h-4 w-4 flex-shrink-0 ${
+               scheduleSearchFilter
+                 ? (theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-500')
+                 : (theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400')
+             }`} />
+             <input
+               ref={scheduleSearchRef}
+               type="text"
+               value={scheduleSearchFilter}
+               onChange={(e) => setScheduleSearchFilter(e.target.value)}
+               placeholder="Filter by task, operator, or skill..."
+               className={`flex-1 bg-transparent outline-none text-sm min-w-0 ${
+                 theme === 'Midnight'
+                   ? 'text-white placeholder-slate-500'
+                   : 'text-gray-900 placeholder-gray-400'
+               }`}
+             />
+             {scheduleSearchFilter && (
+               <button
+                 onClick={() => setScheduleSearchFilter('')}
+                 className={`p-0.5 rounded transition-colors ${
+                   theme === 'Midnight' ? 'text-slate-400 hover:text-white hover:bg-slate-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'
+                 }`}
+               >
+                 <X className="h-4 w-4" />
+               </button>
+             )}
+             <div className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${
+               theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+             }`}>
+               <Command className="h-2.5 w-2.5" />
+               <span>K</span>
+             </div>
+           </div>
+
            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {/* Plan Requirements Button */}
               <button
@@ -2812,7 +6404,7 @@ function App() {
                 title={currentWeek.locked ? 'Unlock schedule to plan' : 'Configure staffing requirements before Smart Fill'}
               >
                 <Layers className="h-4 w-4 opacity-90" />
-                <span className="font-medium text-sm whitespace-nowrap">Plan</span>
+                <span className="font-medium text-sm whitespace-nowrap">Plan the Week</span>
               </button>
 
               {/* Smart Fill Button */}
@@ -2830,25 +6422,54 @@ function App() {
                 <span className="font-medium text-sm whitespace-nowrap">Smart Fill</span>
               </button>
 
-              <button
-                onClick={handleClearSchedule}
-                disabled={currentWeek.locked}
-                className={`p-2.5 transition-colors ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={currentWeek.locked ? 'Unlock schedule to clear' : 'Clear all assignments'}
-              >
-                 <Trash2 className="h-5 w-5" />
-              </button>
+              <Tooltip content={currentWeek.locked ? 'Unlock schedule to clear' : 'Clear all assignments'} position="bottom">
+                <button
+                  onClick={handleClearSchedule}
+                  disabled={currentWeek.locked}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                   <Trash2 className="h-5 w-5" />
+                </button>
+              </Tooltip>
 
-              <button className={`p-2.5 transition-colors ${styles.secondaryBtn}`}>
-                 <Filter className="h-5 w-5" />
-              </button>
-              <button
-                onClick={() => setShowExportModal(true)}
-                className={`p-2.5 transition-colors ${styles.secondaryBtn}`}
-                title="Export schedule"
-              >
-                 <Download className="h-5 w-5" />
-              </button>
+              {/* Header Collapse Toggle */}
+              <Tooltip content={isHeaderCollapsed ? 'Show KPI cards' : 'Hide KPI cards'} position="bottom">
+                <button
+                  onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn} ${isHeaderCollapsed ? 'ring-2 ring-blue-500' : ''}`}
+                >
+                  {isHeaderCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+                </button>
+              </Tooltip>
+
+              {/* Compact View Toggle */}
+              <Tooltip content={isCompactView ? 'Normal view' : 'Compact view'} position="bottom">
+                <button
+                  onClick={() => setIsCompactView(!isCompactView)}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn} ${isCompactView ? 'ring-2 ring-blue-500' : ''}`}
+                >
+                   <Minimize2 className="h-5 w-5" />
+                </button>
+              </Tooltip>
+
+              {/* Fullscreen Toggle */}
+              <Tooltip content={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} position="bottom">
+                <button
+                  onClick={handleToggleFullscreen}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn}`}
+                >
+                   {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+                </button>
+              </Tooltip>
+
+              <Tooltip content="Export schedule" position="bottom">
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn}`}
+                >
+                   <Download className="h-5 w-5" />
+                </button>
+              </Tooltip>
            </div>
         </div>
 
@@ -2859,40 +6480,64 @@ function App() {
             Scroll →
           </div>
 
-          <table className="w-full border-collapse min-w-[1000px]">
+          <table className={`w-full border-collapse ${isCompactView ? 'min-w-0' : 'min-w-[1000px]'}`}>
             <thead className={`sticky top-0 z-30 backdrop-blur-sm ${styles.gridHeader}`}>
               <tr>
-                <th className={`p-4 text-left ${styles.cell} w-48 sm:w-64 sticky left-0 z-40 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-gray-50/95'}`}>
+                <th className={`${isCompactView ? 'p-2' : 'p-4'} text-left ${styles.cell} ${isCompactView ? 'w-32' : 'w-48 sm:w-64'} sticky left-0 z-40 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-gray-50/95'}`}>
                   <div className="flex items-center gap-2">
-                    <span>Operator</span>
-                    <span className={`text-xs font-normal px-1.5 py-0.5 rounded-full ${theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-200/50 text-gray-400'}`}>{operators.length}</span>
+                    <span className={isCompactView ? 'text-xs' : ''}>Operator</span>
+                    {!isCompactView && (
+                      <span className={`text-xs font-normal px-1.5 py-0.5 rounded-full ${theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-200/50 text-gray-400'}`}>{operators.length}</span>
+                    )}
                   </div>
                 </th>
                 {currentWeek.days.map((day, idx) => (
-                  <th key={idx} className={`p-3 text-left min-w-[140px] ${styles.cell}`}>
+                  <th key={idx} className={`${isCompactView ? 'p-1.5' : 'p-3'} text-left ${isCompactView ? 'min-w-[100px]' : 'min-w-[140px]'} ${styles.cell}`}>
                      <div className="flex flex-col">
-                       <span className={`text-xs font-bold uppercase tracking-wider mb-1 ${
+                       <span className={`${isCompactView ? 'text-[10px]' : 'text-xs'} font-bold uppercase tracking-wider ${isCompactView ? 'mb-0' : 'mb-1'} ${
                          theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'
-                       }`}>{day.dayOfWeek}</span>
-                       <span className={`text-sm font-semibold ${styles.text}`}>{day.date.slice(5)}</span>
+                       }`}>{isCompactView ? day.dayOfWeek.slice(0, 3) : day.dayOfWeek}</span>
+                       <span className={`${isCompactView ? 'text-xs' : 'text-sm'} font-semibold ${styles.text}`}>{day.date.slice(5)}</span>
                      </div>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody className={`divide-y ${theme === 'Midnight' ? 'divide-slate-800' : 'divide-gray-50'}`}>
-              {/* Regular Operators */}
-              {operators.filter(op => op.type === 'Regular').map(op => (
+              {/* Regular Operators - sorted alphabetically, filtered by search */}
+              {operators.filter(op => op.type === 'Regular' && shouldShowOperatorRow(op, currentWeek.days)).sort((a, b) => a.name.localeCompare(b.name)).map(op => (
                 <tr key={op.id} className={`transition-colors group ${theme === 'Midnight' ? 'hover:bg-slate-800/30' : 'hover:bg-blue-50/30'}`}>
-                  <td className={`p-3 sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-slate-800/50' : 'bg-white group-hover:bg-blue-50/30'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`h-9 w-9 rounded-full flex items-center justify-center border shadow-inner shrink-0 ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-gradient-to-br from-gray-100 to-gray-200 border-gray-200 text-gray-600'}`}>
-                         <span className="text-sm font-bold">{op.name.charAt(0)}</span>
+                  <td
+                    className={`${isCompactView ? 'p-1.5' : 'p-3'} sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-slate-800/50' : 'bg-white group-hover:bg-blue-50/30'}`}
+                  >
+                    <div className={`flex items-center justify-between ${isCompactView ? 'gap-1.5' : 'gap-3'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        {!isCompactView && (
+                          <div className={`h-9 w-9 rounded-full flex items-center justify-center border shadow-inner shrink-0 ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-gradient-to-br from-gray-100 to-gray-200 border-gray-200 text-gray-600'}`}>
+                             <span className="text-sm font-bold">{op.name.charAt(0)}</span>
+                          </div>
+                        )}
+                        <div className="flex flex-col min-w-0">
+                          <span className={`${isCompactView ? 'text-xs' : 'text-sm'} font-medium leading-none truncate ${styles.text}`}>{op.name}</span>
+                          {!isCompactView && (
+                            <div className="flex items-center gap-1 mt-1 h-[18px]">
+                              <span className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>{op.skills.length} skills</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className={`text-sm font-medium leading-none truncate ${styles.text}`}>{op.name}</span>
-                        <span className={`text-[10px] mt-1 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>{op.skills.length} skills</span>
-                      </div>
+                      <WeeklyAssignButton
+                        operator={op}
+                        tasks={tasks}
+                        onAssign={handleWeeklyAssign}
+                        onEditOperator={(operator) => {
+                          setEditingOperator(operator);
+                          setIsOperatorModalOpen(true);
+                        }}
+                        disabled={currentWeek.locked}
+                        theme={theme}
+                        isCompactView={isCompactView}
+                      />
                     </div>
                   </td>
                   {currentWeek.days.map((day, dayIdx) => {
@@ -2904,27 +6549,67 @@ function App() {
                     const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
                     const cellWarnings = getCellWarnings(op.id, dayIdx);
                     const hasWarning = cellWarnings.length > 0;
+                    const planBuilderViolation = getCellPlanBuilderViolation(op.id, dayIdx);
+                    const hasPlanBuilderViolation = !!planBuilderViolation;
+
+                    // Check if operator is excluded (on leave) for this day
+                    const isExcluded = isOperatorExcludedForDay(currentWeekExclusions, op.id, day.dayOfWeek);
+                    const exclusionInfo = isExcluded ? getOperatorExclusion(currentWeekExclusions, op.id) : null;
+                    const ExclusionIcon = exclusionInfo ? ExclusionIconMap[exclusionInfo.reason] : null;
+
+                    // Check if this assignment matches the search filter
+                    const matchesFilter = doesAssignmentMatchFilter(taskId, op);
+                    const hasActiveFilter = scheduleSearchFilter.trim().length > 0;
 
                     return (
                       <td
                         key={dayIdx}
-                        className={`p-2 relative h-16 align-top ${styles.cell} ${
-                          isDragging ? 'opacity-50' : ''
+                        data-operator-id={op.id}
+                        data-day-index={dayIdx}
+                        className={`${isCompactView ? 'p-1' : 'p-2'} relative ${isCompactView ? 'h-10' : 'h-16'} align-top ${styles.cell} transition-all ${
+                          isExcluded
+                            ? (theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-100/80')
+                            : isDragging ? 'opacity-50' : ''
                         } ${
-                          isDropTarget ? (theme === 'Midnight' ? 'bg-indigo-900/20' : 'bg-blue-50') : ''
+                          !isExcluded && isDropTarget ? (theme === 'Midnight' ? 'bg-indigo-900/20' : 'bg-blue-50') : ''
                         } ${
-                          hasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
+                          !isExcluded && hasPlanBuilderViolation
+                            ? (theme === 'Midnight' ? 'bg-purple-900/20 border-l-4 border-l-purple-500' : 'bg-purple-50 border-l-4 border-l-purple-500')
+                            : !isExcluded && hasWarning
+                              ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50')
+                              : ''
                         }`}
                         onDragOver={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
                         }}
                         onDrop={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           handleDragDrop(op.id, dayIdx);
                         }}
                       >
-                        {isSelected ? (
+                        {/* Excluded/Leave Cell */}
+                        {isExcluded ? (
+                          <Tooltip
+                            content={`${EXCLUSION_REASONS[exclusionInfo!.reason].label}${exclusionInfo?.note ? `: ${exclusionInfo.note}` : ''}`}
+                            position="top"
+                          >
+                            <div
+                              className={`w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg flex flex-col items-center justify-center ${isCompactView ? 'p-0.5' : 'p-1'} border border-dashed ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-800/30 border-slate-700 text-slate-500'
+                                  : 'bg-gray-100 border-gray-300 text-gray-400'
+                              }`}
+                            >
+                              {ExclusionIcon && <ExclusionIcon className={`${isCompactView ? 'w-3 h-3' : 'w-4 h-4'} mb-0.5`} />}
+                              <span className={`${isCompactView ? 'text-[8px]' : 'text-[10px]'} font-medium uppercase tracking-wider`}>
+                                {isCompactView ? EXCLUSION_REASONS[exclusionInfo!.reason].label.slice(0, 3) : EXCLUSION_REASONS[exclusionInfo!.reason].label}
+                              </span>
+                            </div>
+                          </Tooltip>
+                        ) : isSelected ? (
                           // Popover Menu
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-64 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
                              <div className={`flex justify-between items-center mb-2 pb-2 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-100'}`}>
@@ -3015,23 +6700,44 @@ function App() {
                             }}
                             onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => handleCellClick(op.id, dayIdx, e)}
+                            onMouseEnter={(e) => handleCellHover(op.id, dayIdx, e, true)}
+                            onMouseLeave={(e) => handleCellHover(op.id, dayIdx, e, false)}
                             style={getTaskStyle(taskId)}
-                            className={`w-full h-full min-h-[44px] rounded-lg flex flex-col items-center justify-center p-1 transition-all duration-200 border ${
+                            className={`relative w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg flex flex-col items-center justify-center ${isCompactView ? 'p-0.5' : 'p-1'} transition-all duration-200 border ${
+                              // Priority 1: Selected cells - prominent blue ring + overlay
                               isCellSelected(op.id, dayIdx)
-                                ? (theme === 'Midnight'
-                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
-                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
-                                : !taskId
-                                  ? (theme === 'Midnight'
-                                     ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30'
-                                     : 'bg-white border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/30')
-                                  : 'hover:brightness-95 hover:shadow-md cursor-grab active:cursor-grabbing'
+                                ? `ring-4 ring-blue-500 ${!taskId ? 'bg-blue-500/20' : ''}`
+                                // Priority 2: Preview cells - dashed blue ring
+                                : isCellInRangePreview(op.id, dayIdx)
+                                  ? 'ring-2 ring-dashed ring-blue-400'
+                                  // Priority 3: Locked cells in selection range - red ring
+                                  : (assignment?.locked && selectedCells.size > 0)
+                                    ? 'ring-2 ring-red-400'
+                                    // Priority 4: Default state
+                                    : !taskId
+                                      ? (theme === 'Midnight'
+                                         ? 'bg-transparent border-dashed border-slate-800 hover:border-indigo-500/50 hover:bg-slate-800/30'
+                                         : 'bg-white border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/30')
+                                      : 'hover:brightness-95 hover:shadow-md cursor-grab active:cursor-grabbing'
+                            } ${
+                              // Hide non-matching pills when filter is active
+                              hasActiveFilter && !matchesFilter
+                                ? 'opacity-20 pointer-events-none'
+                                : hasActiveFilter && matchesFilter && taskId
+                                  ? 'ring-2 ring-offset-1 ring-blue-500 shadow-lg z-10 brightness-110'
+                                  : ''
                             }`}
                           >
                             {taskId ? (
-                              <span className="text-xs font-bold text-center leading-tight line-clamp-2">{getTaskName(taskId)}</span>
+                              <span className={`${isCompactView ? 'text-[10px]' : 'text-xs'} font-bold text-center leading-tight ${isCompactView ? 'line-clamp-1' : 'line-clamp-2'}`}>{getTaskName(taskId)}</span>
                             ) : (
-                              <Plus className={`w-4 h-4 ${theme === 'Midnight' ? 'text-slate-700' : 'text-gray-300'}`} />
+                              <Plus className={`${isCompactView ? 'w-3 h-3' : 'w-4 h-4'} ${theme === 'Midnight' ? 'text-slate-700' : 'text-gray-300'}`} />
+                            )}
+                            {/* Selection checkmark - shows on selected cells */}
+                            {isCellSelected(op.id, dayIdx) && (
+                              <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
                             )}
                             {/* Pinned indicator */}
                             {assignment?.pinned && (
@@ -3043,16 +6749,37 @@ function App() {
                         )}
                         {/* Warning Indicator */}
                         {hasWarning && !isSelected && (
-                          <div
-                            className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
-                              theme === 'Midnight'
-                                ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-amber-100 text-amber-600'
-                            }`}
-                            title={cellWarnings.map(w => w.message).join('\n')}
+                          <Tooltip
+                            content={cellWarnings.map(w => w.message).join('\n')}
+                            position="left"
                           >
-                            <AlertTriangle className="w-3 h-3" />
-                          </div>
+                            <div
+                              className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
+                                theme === 'Midnight'
+                                  ? 'bg-amber-500/20 text-amber-400'
+                                  : 'bg-amber-100 text-amber-600'
+                              }`}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                            </div>
+                          </Tooltip>
+                        )}
+                        {/* Plan Builder Violation Indicator */}
+                        {hasPlanBuilderViolation && !isSelected && (
+                          <Tooltip
+                            content={`Plan Builder: ${planBuilderViolation!.taskName} needs ${planBuilderViolation!.required} but has ${planBuilderViolation!.actual} (${planBuilderViolation!.type === 'over' ? `+${planBuilderViolation!.excess} extra` : `${planBuilderViolation!.shortage} short`})`}
+                            position="right"
+                          >
+                            <div
+                              className={`absolute top-1 left-1 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
+                                theme === 'Midnight'
+                                  ? 'bg-purple-500/20 text-purple-400'
+                                  : 'bg-purple-100 text-purple-600'
+                              }`}
+                            >
+                              <AlertCircle className="w-3 h-3" />
+                            </div>
+                          </Tooltip>
                         )}
                         {isSelected && (
                           <div 
@@ -3098,14 +6825,19 @@ function App() {
                  </td>
               </tr>
 
-              {/* Flex Operators */}
-              {operators.filter(op => op.type === 'Flex').map(op => (
+              {/* Flex Operators - sorted alphabetically, filtered by search */}
+              {operators.filter(op => op.type === 'Flex' && shouldShowOperatorRow(op, currentWeek.days)).sort((a, b) => a.name.localeCompare(b.name)).map(op => (
                 <tr key={op.id} className={`transition-colors group ${theme === 'Midnight' ? 'hover:bg-purple-900/10' : 'hover:bg-purple-50/30'}`}>
-                  <td className={`p-3 sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-purple-900/10' : 'bg-white group-hover:bg-purple-50/30'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`h-9 w-9 rounded-full flex items-center justify-center border shadow-inner shrink-0 ${theme === 'Midnight' ? 'bg-purple-900/30 border-purple-800 text-purple-300' : 'bg-purple-100 border-purple-200 text-purple-600'}`}>
-                         <span className="text-sm font-bold">{op.name.charAt(0)}</span>
-                      </div>
+                  <td
+                    className={`${isCompactView ? 'p-1.5' : 'p-3'} sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-purple-900/10' : 'bg-white group-hover:bg-purple-50/30'}`}
+                  >
+                    <div className={`flex items-center justify-between ${isCompactView ? 'gap-1.5' : 'gap-3'}`}>
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                      {!isCompactView && (
+                        <div className={`h-9 w-9 rounded-full flex items-center justify-center border shadow-inner shrink-0 ${theme === 'Midnight' ? 'bg-purple-900/30 border-purple-800 text-purple-300' : 'bg-purple-100 border-purple-200 text-purple-600'}`}>
+                           <span className="text-sm font-bold">{op.name.charAt(0)}</span>
+                        </div>
+                      )}
                       <div className="flex flex-col min-w-0 flex-1">
                         {editingFlexName === op.id ? (
                           <input
@@ -3121,7 +6853,7 @@ function App() {
                                 setEditingFlexName(null);
                               }
                             }}
-                            className={`text-sm font-medium leading-none px-2 py-1 rounded-md border outline-none w-full max-w-[120px] ${
+                            className={`${isCompactView ? 'text-xs' : 'text-sm'} font-medium leading-none px-2 py-1 rounded-md border outline-none w-full max-w-[120px] ${
                               theme === 'Midnight'
                                 ? 'bg-slate-800 border-purple-600 text-slate-200 focus:border-purple-400'
                                 : 'bg-white border-purple-300 text-gray-800 focus:border-purple-500'
@@ -3131,7 +6863,7 @@ function App() {
                           <button
                             onClick={() => !currentWeek.locked && startEditingFlexName(op)}
                             disabled={currentWeek.locked}
-                            className={`text-sm font-medium leading-none truncate text-left ${styles.text} ${
+                            className={`${isCompactView ? 'text-xs' : 'text-sm'} font-medium leading-none truncate text-left ${styles.text} ${
                               !currentWeek.locked ? 'hover:text-purple-600 cursor-pointer' : 'cursor-default'
                             }`}
                             title={currentWeek.locked ? op.name : 'Click to rename'}
@@ -3139,25 +6871,46 @@ function App() {
                             {op.name}
                           </button>
                         )}
-                        <div className="flex items-center gap-1 mt-1">
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Flex</span>
-                          <span className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>{op.skills.length} skills</span>
-                        </div>
+                        {!isCompactView && (
+                          <div className="flex items-center gap-1 mt-1 h-[18px]">
+                            <span className={`text-[10px] px-1.5 leading-[16px] rounded-full font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'bg-purple-800/60 text-purple-200' : 'bg-purple-100 text-purple-700'}`}>Flex</span>
+                            <span className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'}`}>{op.skills.length} skills</span>
+                          </div>
+                        )}
                       </div>
-                      {/* Delete button - only visible on hover when not locked */}
-                      {!currentWeek.locked && (
-                        <button
-                          onClick={() => handleRemoveFlexOperator(op.id)}
-                          className={`opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all ${
-                            theme === 'Midnight'
-                              ? 'hover:bg-red-900/30 text-slate-500 hover:text-red-400'
-                              : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
-                          }`}
-                          title="Remove flex operator"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {/* Weekly assignment button */}
+                        <WeeklyAssignButton
+                          operator={op}
+                          tasks={tasks}
+                          onAssign={handleWeeklyAssign}
+                          onEditOperator={(operator) => {
+                            setEditingOperator(operator);
+                            setIsOperatorModalOpen(true);
+                          }}
+                          disabled={currentWeek.locked}
+                          theme={theme}
+                          isCompactView={isCompactView}
+                        />
+                        {/* Delete button - only visible on hover when not locked */}
+                        {!currentWeek.locked && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveFlexOperator(op.id);
+                            }}
+                            className={`opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all ${
+                              theme === 'Midnight'
+                                ? 'hover:bg-red-900/30 text-slate-500 hover:text-red-400'
+                                : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
+                            }`}
+                            title="Remove flex operator"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </td>
                   {currentWeek.days.map((day, dayIdx) => {
@@ -3170,26 +6923,60 @@ function App() {
                     const flexCellWarnings = getCellWarnings(op.id, dayIdx);
                     const flexHasWarning = flexCellWarnings.length > 0;
 
+                    // Check if operator is excluded (on leave) for this day
+                    const isExcluded = isOperatorExcludedForDay(currentWeekExclusions, op.id, day.dayOfWeek);
+                    const exclusionInfo = isExcluded ? getOperatorExclusion(currentWeekExclusions, op.id) : null;
+                    const ExclusionIcon = exclusionInfo ? ExclusionIconMap[exclusionInfo.reason] : null;
+
+                    // Check if this assignment matches the search filter
+                    const matchesFilter = doesAssignmentMatchFilter(taskId, op);
+                    const hasActiveFilter = scheduleSearchFilter.trim().length > 0;
+
                     return (
                       <td
                         key={dayIdx}
-                        className={`p-2 relative h-16 align-top ${styles.cell} ${
-                          isDragging ? 'opacity-50' : ''
+                        data-operator-id={op.id}
+                        data-day-index={dayIdx}
+                        className={`${isCompactView ? 'p-1' : 'p-2'} relative ${isCompactView ? 'h-10' : 'h-16'} align-top ${styles.cell} transition-all ${
+                          isExcluded
+                            ? (theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-100/80')
+                            : isDragging ? 'opacity-50' : ''
                         } ${
-                          isDropTarget ? (theme === 'Midnight' ? 'bg-purple-900/20' : 'bg-purple-50') : ''
+                          !isExcluded && isDropTarget ? (theme === 'Midnight' ? 'bg-purple-900/20' : 'bg-purple-50') : ''
                         } ${
-                          flexHasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
+                          !isExcluded && flexHasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
                         }`}
                         onDragOver={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
                         }}
                         onDrop={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           handleDragDrop(op.id, dayIdx);
                         }}
                       >
-                        {isSelected ? (
+                        {/* Excluded/Leave Cell */}
+                        {isExcluded ? (
+                          <Tooltip
+                            content={`${EXCLUSION_REASONS[exclusionInfo!.reason].label}${exclusionInfo?.note ? `: ${exclusionInfo.note}` : ''}`}
+                            position="top"
+                          >
+                            <div
+                              className={`w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg flex flex-col items-center justify-center ${isCompactView ? 'p-0.5' : 'p-1'} border border-dashed ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-800/30 border-slate-700 text-slate-500'
+                                  : 'bg-gray-100 border-gray-300 text-gray-400'
+                              }`}
+                            >
+                              {ExclusionIcon && <ExclusionIcon className={`${isCompactView ? 'w-3 h-3' : 'w-4 h-4'} mb-0.5`} />}
+                              <span className={`${isCompactView ? 'text-[8px]' : 'text-[10px]'} font-medium uppercase tracking-wider`}>
+                                {isCompactView ? EXCLUSION_REASONS[exclusionInfo!.reason].label.slice(0, 3) : EXCLUSION_REASONS[exclusionInfo!.reason].label}
+                              </span>
+                            </div>
+                          </Tooltip>
+                        ) : isSelected ? (
                           // Simplified Popover for Flex - only shows their available tasks
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-56 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
                              <div className={`flex justify-between items-center mb-2 pb-2 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-100'}`}>
@@ -3240,21 +7027,42 @@ function App() {
                             }}
                             onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
+                            onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
+                            onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
                             disabled={currentWeek.locked}
-                            className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
+                            className={`relative w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg border-2 border-dashed flex items-center justify-center ${isCompactView ? 'text-[10px]' : 'text-xs'} font-medium transition-all ${
+                              // Priority 1: Selected cells - prominent blue ring
                               isCellSelected(op.id, dayIdx)
-                                ? (theme === 'Midnight'
-                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
-                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
-                                : task
-                                  ? 'border-transparent cursor-grab active:cursor-grabbing'
-                                  : theme === 'Midnight'
-                                  ? 'border-slate-800 hover:border-slate-700 text-slate-600'
-                                  : 'border-gray-200 hover:border-gray-300 text-gray-400'
-                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
+                                ? `ring-4 ring-blue-500 ${!task ? 'bg-blue-500/20' : ''}`
+                                // Priority 2: Preview cells - dashed blue ring
+                                : isCellInRangePreview(op.id, dayIdx)
+                                  ? 'ring-2 ring-dashed ring-blue-400 border-transparent'
+                                  // Priority 3: Locked cells in selection range - red ring
+                                  : (assignment?.locked && selectedCells.size > 0)
+                                    ? 'ring-2 ring-red-400 border-transparent'
+                                    // Priority 4: Default state
+                                    : task
+                                      ? 'border-transparent cursor-grab active:cursor-grabbing'
+                                      : theme === 'Midnight'
+                                      ? 'border-slate-800 hover:border-slate-700 text-slate-600'
+                                      : 'border-gray-200 hover:border-gray-300 text-gray-400'
+                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''} ${
+                              // Hide non-matching pills when filter is active
+                              hasActiveFilter && !matchesFilter
+                                ? 'opacity-20 pointer-events-none'
+                                : hasActiveFilter && matchesFilter && task
+                                  ? 'ring-2 ring-offset-1 ring-purple-500 shadow-lg z-10 brightness-110'
+                                  : ''
+                            }`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
                             {task ? task.name : '-'}
+                            {/* Selection checkmark - shows on selected cells */}
+                            {isCellSelected(op.id, dayIdx) && (
+                              <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
+                            )}
                           </button>
                         )}
                         {/* Warning Indicator for Flex */}
@@ -3301,18 +7109,38 @@ function App() {
                  </td>
               </tr>
 
-              {/* Coordinator Operators */}
-              {operators.filter(op => op.type === 'Coordinator').map(op => (
+              {/* Coordinator Operators - sorted alphabetically, filtered by search */}
+              {operators.filter(op => op.type === 'Coordinator' && shouldShowOperatorRow(op, currentWeek.days)).sort((a, b) => a.name.localeCompare(b.name)).map(op => (
                 <tr key={op.id} className={`transition-colors group ${theme === 'Midnight' ? 'hover:bg-emerald-900/10' : 'hover:bg-emerald-50/30'}`}>
-                  <td className={`p-3 sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-emerald-900/10' : 'bg-white group-hover:bg-emerald-50/30'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`h-9 w-9 rounded-full flex items-center justify-center border font-bold shadow-sm shrink-0 ${theme === 'Midnight' ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
-                         {op.name.charAt(0)}
+                  <td
+                    className={`${isCompactView ? 'p-1.5' : 'p-3'} sticky left-0 z-20 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${styles.cell} ${theme === 'Midnight' ? 'bg-slate-900 group-hover:bg-emerald-900/10' : 'bg-white group-hover:bg-emerald-50/30'}`}
+                  >
+                    <div className={`flex items-center justify-between ${isCompactView ? 'gap-1.5' : 'gap-3'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        {!isCompactView && (
+                          <div className={`h-9 w-9 rounded-full flex items-center justify-center border font-bold shadow-sm shrink-0 ${theme === 'Midnight' ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
+                             {op.name.charAt(0)}
+                          </div>
+                        )}
+                        <div className="flex flex-col min-w-0">
+                          <span className={`${isCompactView ? 'text-xs' : 'text-sm'} font-bold truncate ${styles.text}`}>{op.name}</span>
+                          {!isCompactView && (
+                            <span className="text-[10px] text-emerald-600 font-medium uppercase tracking-wide">Coordinator</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className={`text-sm font-bold truncate ${styles.text}`}>{op.name}</span>
-                        <span className="text-[10px] text-emerald-600 font-medium uppercase tracking-wide">Coordinator</span>
-                      </div>
+                      <WeeklyAssignButton
+                        operator={op}
+                        tasks={tasks}
+                        onAssign={handleWeeklyAssign}
+                        onEditOperator={(operator) => {
+                          setEditingOperator(operator);
+                          setIsOperatorModalOpen(true);
+                        }}
+                        disabled={currentWeek.locked}
+                        theme={theme}
+                        isCompactView={isCompactView}
+                      />
                     </div>
                   </td>
                   {currentWeek.days.map((day, dayIdx) => {
@@ -3323,24 +7151,58 @@ function App() {
                     const isDragging = dragInfo?.opId === op.id && dragInfo?.dayIndex === dayIdx;
                     const isDropTarget = dragInfo && (dragInfo.opId !== op.id || dragInfo.dayIndex !== dayIdx);
 
+                    // Check if operator is excluded (on leave) for this day
+                    const isExcluded = isOperatorExcludedForDay(currentWeekExclusions, op.id, day.dayOfWeek);
+                    const exclusionInfo = isExcluded ? getOperatorExclusion(currentWeekExclusions, op.id) : null;
+                    const ExclusionIcon = exclusionInfo ? ExclusionIconMap[exclusionInfo.reason] : null;
+
+                    // Check if this assignment matches the search filter
+                    const matchesFilter = doesAssignmentMatchFilter(taskId, op);
+                    const hasActiveFilter = scheduleSearchFilter.trim().length > 0;
+
                     return (
                       <td
                         key={dayIdx}
-                        className={`p-2 relative h-16 align-top ${styles.cell} ${
-                          isDragging ? 'opacity-50' : ''
+                        data-operator-id={op.id}
+                        data-day-index={dayIdx}
+                        className={`${isCompactView ? 'p-1' : 'p-2'} relative ${isCompactView ? 'h-10' : 'h-16'} align-top ${styles.cell} transition-all ${
+                          isExcluded
+                            ? (theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-100/80')
+                            : isDragging ? 'opacity-50' : ''
                         } ${
-                          isDropTarget ? (theme === 'Midnight' ? 'bg-emerald-900/20' : 'bg-emerald-50') : ''
+                          !isExcluded && isDropTarget ? (theme === 'Midnight' ? 'bg-emerald-900/20' : 'bg-emerald-50') : ''
                         }`}
                         onDragOver={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
                         }}
                         onDrop={(e) => {
+                          if (isExcluded) return;
                           e.preventDefault();
                           handleDragDrop(op.id, dayIdx);
                         }}
                       >
-                        {isSelected ? (
+                        {/* Excluded/Leave Cell */}
+                        {isExcluded ? (
+                          <Tooltip
+                            content={`${EXCLUSION_REASONS[exclusionInfo!.reason].label}${exclusionInfo?.note ? `: ${exclusionInfo.note}` : ''}`}
+                            position="top"
+                          >
+                            <div
+                              className={`w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg flex flex-col items-center justify-center ${isCompactView ? 'p-0.5' : 'p-1'} border border-dashed ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-800/30 border-slate-700 text-slate-500'
+                                  : 'bg-gray-100 border-gray-300 text-gray-400'
+                              }`}
+                            >
+                              {ExclusionIcon && <ExclusionIcon className={`${isCompactView ? 'w-3 h-3' : 'w-4 h-4'} mb-0.5`} />}
+                              <span className={`${isCompactView ? 'text-[8px]' : 'text-[10px]'} font-medium uppercase tracking-wider`}>
+                                {isCompactView ? EXCLUSION_REASONS[exclusionInfo!.reason].label.slice(0, 3) : EXCLUSION_REASONS[exclusionInfo!.reason].label}
+                              </span>
+                            </div>
+                          </Tooltip>
+                        ) : isSelected ? (
                           // Popover for Coordinator - only shows coordinator tasks
                           <div className={`absolute top-2 left-2 z-50 shadow-xl ring-1 rounded-xl p-3 w-56 animate-in fade-in zoom-in-95 duration-100 origin-top-left ${theme === 'Midnight' ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-black/5'}`}>
                              <div className={`flex justify-between items-center mb-2 pb-2 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-100'}`}>
@@ -3391,21 +7253,42 @@ function App() {
                             }}
                             onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
+                            onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
+                            onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
                             disabled={currentWeek.locked}
-                            className={`w-full h-full min-h-[44px] rounded-lg border-2 border-dashed flex items-center justify-center text-xs font-medium transition-all ${
+                            className={`relative w-full h-full ${isCompactView ? 'min-h-[28px]' : 'min-h-[44px]'} rounded-lg border-2 border-dashed flex items-center justify-center ${isCompactView ? 'text-[10px]' : 'text-xs'} font-medium transition-all ${
+                              // Priority 1: Selected cells - prominent blue ring
                               isCellSelected(op.id, dayIdx)
-                                ? (theme === 'Midnight'
-                                   ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 bg-indigo-900/30'
-                                   : 'ring-2 ring-blue-500 ring-offset-2 bg-blue-100')
-                                : task
-                                  ? 'border-transparent cursor-grab active:cursor-grabbing'
-                                  : theme === 'Midnight'
-                                  ? 'border-slate-800 hover:border-emerald-700 text-slate-600'
-                                  : 'border-gray-200 hover:border-emerald-300 text-gray-400'
-                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''}`}
+                                ? `ring-4 ring-blue-500 ${!task ? 'bg-blue-500/20' : ''}`
+                                // Priority 2: Preview cells - dashed blue ring
+                                : isCellInRangePreview(op.id, dayIdx)
+                                  ? 'ring-2 ring-dashed ring-blue-400 border-transparent'
+                                  // Priority 3: Locked cells in selection range - red ring
+                                  : (assignment?.locked && selectedCells.size > 0)
+                                    ? 'ring-2 ring-red-400 border-transparent'
+                                    // Priority 4: Default state
+                                    : task
+                                      ? 'border-transparent cursor-grab active:cursor-grabbing'
+                                      : theme === 'Midnight'
+                                      ? 'border-slate-800 hover:border-emerald-700 text-slate-600'
+                                      : 'border-gray-200 hover:border-emerald-300 text-gray-400'
+                            } ${currentWeek.locked ? 'cursor-not-allowed opacity-60' : ''} ${
+                              // Hide non-matching pills when filter is active
+                              hasActiveFilter && !matchesFilter
+                                ? 'opacity-20 pointer-events-none'
+                                : hasActiveFilter && matchesFilter && task
+                                  ? 'ring-2 ring-offset-1 ring-emerald-500 shadow-lg z-10 brightness-110'
+                                  : ''
+                            }`}
                             style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
                           >
                             {task ? task.name : '-'}
+                            {/* Selection checkmark - shows on selected cells */}
+                            {isCellSelected(op.id, dayIdx) && (
+                              <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
+                            )}
                           </button>
                         )}
                         {isSelected && (
@@ -3423,42 +7306,6 @@ function App() {
                 </tr>
               ))}
             </tbody>
-            <tfoot className={`sticky bottom-0 z-30 ${theme === 'Midnight' ? 'bg-slate-900/95 backdrop-blur-sm' : 'bg-gray-50/95 backdrop-blur-sm'}`}>
-              <tr className={`border-t-2 ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
-                <td className={`p-3 sticky left-0 z-40 ${theme === 'Midnight' ? 'bg-slate-900/95' : 'bg-gray-50/95'}`}>
-                  <div className="flex items-center gap-2">
-                    <Activity className={`h-4 w-4 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-500'}`} />
-                    <span className={`text-xs font-bold uppercase tracking-wide ${theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'}`}>Coverage</span>
-                  </div>
-                </td>
-                {currentWeek.days.map((day, dayIdx) => {
-                  // Calculate daily coverage
-                  const availableOps = operators.filter(o => o.status === 'Active' && o.type !== 'Coordinator');
-                  const totalSlotsDay = availableOps.length;
-                  const filledSlotsDay = Object.values(day.assignments).filter(a => (a as ScheduleAssignment).taskId !== null).length;
-                  const coverageDay = totalSlotsDay > 0 ? Math.round((filledSlotsDay / totalSlotsDay) * 100) : 0;
-
-                  return (
-                    <td key={dayIdx} className="p-2 text-center">
-                      <div className="flex flex-col items-center gap-1">
-                        <div className={`text-lg font-bold ${
-                          coverageDay >= 90
-                            ? 'text-emerald-500'
-                            : coverageDay >= 70
-                            ? theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
-                            : 'text-red-500'
-                        }`}>
-                          {coverageDay}%
-                        </div>
-                        <div className={`text-[10px] ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`}>
-                          {filledSlotsDay}/{totalSlotsDay}
-                        </div>
-                      </div>
-                    </td>
-                  );
-                })}
-              </tr>
-            </tfoot>
           </table>
         </div>
       </div>
@@ -3604,6 +7451,28 @@ function App() {
     </div>
   );
 
+  // --- Auth Checking Screen ---
+  if (authChecking) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+          <p className="text-sm text-slate-400">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Setup Screen (First Run) ---
+  if (needsSetup) {
+    return <SetupPage onComplete={handleSetupComplete} onSwitchToLogin={() => setNeedsSetup(false)} />;
+  }
+
+  // --- Login Screen (Not Authenticated) ---
+  if (!currentUser) {
+    return <LoginPage onLogin={handleLogin} onSwitchToSetup={() => setNeedsSetup(true)} />;
+  }
+
   // --- Loading Screen ---
   if (loadingState === 'loading') {
     return (
@@ -3682,6 +7551,11 @@ function App() {
           isOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}
+          onOpenFeedback={() => setShowFeedbackModal(true)}
+          user={currentUser}
+          onSignOut={handleSignOut}
+          isCollapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
       )}
 
@@ -3700,7 +7574,7 @@ function App() {
            </button>
         </header>
 
-        <div className="flex-1 overflow-auto p-4 lg:p-8 relative">
+        <div className="flex-1 overflow-auto p-4 lg:p-8 pb-20 lg:pb-8 relative">
           {activeTab === 'schedule' && renderScheduleView()}
           {activeTab === 'team' && renderTeamView()}
           {activeTab === 'dashboard' && renderDashboardView()}
@@ -3708,6 +7582,50 @@ function App() {
         </div>
         
         <ThemeSwitcher />
+
+        {/* Mobile Bottom Navigation */}
+        <nav className={`lg:hidden fixed bottom-0 left-0 right-0 z-50 border-t safe-area-inset-bottom ${
+          theme === 'Midnight'
+            ? 'bg-slate-900/95 backdrop-blur-lg border-slate-800'
+            : 'bg-white/95 backdrop-blur-lg border-gray-200'
+        }`}>
+          <div className="flex items-center justify-around h-16 px-2">
+            {[
+              { id: 'dashboard', icon: LayoutDashboard, label: 'Overview' },
+              { id: 'schedule', icon: Calendar, label: 'Roster' },
+              { id: 'team', icon: Users, label: 'Team' },
+              { id: 'settings', icon: Settings, label: 'Config' },
+            ].map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`flex flex-col items-center justify-center flex-1 h-full gap-1 transition-colors ${
+                    isActive
+                      ? theme === 'Midnight'
+                        ? 'text-indigo-400'
+                        : 'text-blue-600'
+                      : theme === 'Midnight'
+                        ? 'text-slate-500 hover:text-slate-300'
+                        : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                  aria-label={item.label}
+                  aria-current={isActive ? 'page' : undefined}
+                >
+                  <Icon className={`h-5 w-5 ${isActive ? 'scale-110' : ''} transition-transform`} />
+                  <span className={`text-[10px] font-semibold ${isActive ? 'font-bold' : ''}`}>{item.label}</span>
+                  {isActive && (
+                    <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full ${
+                      theme === 'Midnight' ? 'bg-indigo-500' : 'bg-blue-600'
+                    }`} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
       </main>
 
       <OperatorModal
@@ -3715,6 +7633,7 @@ function App() {
         onClose={() => setIsOperatorModalOpen(false)}
         onSave={handleSaveOperator}
         operator={editingOperator}
+        skills={skills}
       />
 
       {/* Publish Modal */}
@@ -3763,6 +7682,822 @@ function App() {
         </div>
       )}
 
+      {/* Plan Builder Violations Confirmation Modal */}
+      {showPublishConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowPublishConfirmModal(false)} />
+          <div className={`relative w-full max-w-2xl rounded-2xl p-6 shadow-2xl ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-start gap-4 mb-4">
+              <div className={`p-2 rounded-full ${
+                theme === 'Midnight' ? 'bg-purple-500/20' : 'bg-purple-100'
+              }`}>
+                <AlertCircle className={`h-6 w-6 ${
+                  theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600'
+                }`} />
+              </div>
+              <div className="flex-1">
+                <h3 className={`text-xl font-bold mb-1 ${styles.text}`}>
+                  Plan Builder Requirements Not Met
+                </h3>
+                <p className={`text-sm ${styles.muted}`}>
+                  The schedule has {planBuilderViolations.length} {planBuilderViolations.length === 1 ? 'violation' : 'violations'} that don't meet Plan Builder requirements.
+                </p>
+              </div>
+            </div>
+
+            <div className={`p-4 rounded-xl mb-6 max-h-64 overflow-y-auto ${
+              theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'
+            }`}>
+              <div className="space-y-2">
+                {planBuilderViolations.map((violation, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-lg ${
+                      theme === 'Midnight' ? 'bg-slate-700/50' : 'bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={`font-bold text-sm ${
+                        theme === 'Midnight' ? 'text-purple-300' : 'text-purple-700'
+                      }`}>
+                        {violation.day}:
+                      </span>
+                      <div className="flex-1">
+                        <p className={`text-sm ${styles.text}`}>
+                          <span className="font-semibold">{violation.taskName}</span> needs{' '}
+                          <span className="font-bold">{violation.required}</span> but has{' '}
+                          <span className="font-bold">{violation.actual}</span>
+                        </p>
+                        <p className={`text-xs mt-1 ${
+                          theme === 'Midnight' ? 'text-purple-400' : 'text-purple-600'
+                        }`}>
+                          {violation.type === 'over'
+                            ? `+${violation.excess} extra ${violation.excess === 1 ? 'operator' : 'operators'}`
+                            : `${violation.shortage} ${violation.shortage === 1 ? 'operator' : 'operators'} short`}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className={`p-4 rounded-xl mb-6 border-2 ${
+              theme === 'Midnight'
+                ? 'bg-amber-500/5 border-amber-500/30'
+                : 'bg-amber-50 border-amber-200'
+            }`}>
+              <p className={`text-sm ${
+                theme === 'Midnight' ? 'text-amber-300' : 'text-amber-800'
+              }`}>
+                <strong>Warning:</strong> Publishing with violations means the schedule won't meet the exact requirements you specified in Plan Builder. Are you sure you want to continue?
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowPublishConfirmModal(false)}
+                className={`flex-1 py-2.5 rounded-xl font-medium transition-colors ${styles.secondaryBtn}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePublishScheduleConfirmed}
+                className={`flex-1 py-2.5 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 ${
+                  theme === 'Midnight'
+                    ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                    : 'bg-purple-600 hover:bg-purple-700 text-white'
+                }`}
+              >
+                <Send className="h-4 w-4" />
+                Publish Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Warnings Acknowledgment Modal - For Publish Flow */}
+      {showCriticalWarningsModal && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="critical-warnings-title"
+          aria-describedby="critical-warnings-desc"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setShowCriticalWarningsModal(false);
+            }
+            // Focus trap
+            if (e.key === 'Tab') {
+              const modal = e.currentTarget.querySelector('[data-modal-content]');
+              if (!modal) return;
+              const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+              const first = focusable[0] as HTMLElement;
+              const last = focusable[focusable.length - 1] as HTMLElement;
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last?.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first?.focus();
+              }
+            }
+          }}
+        >
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowCriticalWarningsModal(false)} aria-hidden="true" />
+          <div
+            data-modal-content
+            className={`relative w-full max-w-2xl rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-bottom-4 duration-300 ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setShowCriticalWarningsModal(false)}
+              className={`absolute top-4 right-4 p-1.5 rounded-lg transition-colors ${
+                theme === 'Midnight' ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-4 mb-4">
+              <div className={`p-2 rounded-full ${
+                hasCriticalWarnings
+                  ? (theme === 'Midnight' ? 'bg-red-500/20' : 'bg-red-100')
+                  : (theme === 'Midnight' ? 'bg-amber-500/20' : 'bg-amber-100')
+              }`}>
+                <AlertTriangle className={`h-6 w-6 ${
+                  hasCriticalWarnings
+                    ? (theme === 'Midnight' ? 'text-red-400' : 'text-red-600')
+                    : (theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600')
+                }`} />
+              </div>
+              <div className="flex-1">
+                <h3 id="critical-warnings-title" className={`text-xl font-bold mb-1 ${styles.text}`}>
+                  Schedule Warnings
+                </h3>
+                <p id="critical-warnings-desc" className={`text-sm ${styles.muted}`}>
+                  The schedule has {scheduleWarnings.length} {scheduleWarnings.length === 1 ? 'warning' : 'warnings'}.
+                  You can fix these issues or acknowledge and proceed with publishing.
+                </p>
+              </div>
+            </div>
+
+            {/* Severity Summary */}
+            <div className="flex items-center gap-2 mb-4">
+              {warningsSummary.critical > 0 && (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-red-500/20 text-red-500">
+                  {warningsSummary.critical} Critical
+                </span>
+              )}
+              {warningsSummary.warning > 0 && (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-amber-500/20 text-amber-600">
+                  {warningsSummary.warning} Warning
+                </span>
+              )}
+              {warningsSummary.info > 0 && (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-blue-500/20 text-blue-500">
+                  {warningsSummary.info} Info
+                </span>
+              )}
+            </div>
+
+            {/* Filter Toggles */}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className={`text-xs font-medium ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-500'}`}>Filter:</span>
+              <button
+                onClick={() => setWarningsFilter('all')}
+                className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                  warningsFilter === 'all'
+                    ? (theme === 'Midnight' ? 'bg-indigo-500 text-white' : 'bg-blue-600 text-white')
+                    : (theme === 'Midnight' ? 'bg-slate-800 text-slate-400 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')
+                }`}
+              >
+                All ({scheduleWarnings.length})
+              </button>
+              {warningsSummary.byType['skill_mismatch'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('skill_mismatch')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                    warningsFilter === 'skill_mismatch'
+                      ? 'bg-red-500 text-white'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-red-400 hover:bg-slate-700' : 'bg-red-50 text-red-600 hover:bg-red-100')
+                  }`}
+                >
+                  Skill ({warningsSummary.byType['skill_mismatch']})
+                </button>
+              )}
+              {warningsSummary.byType['double_assignment'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('double_assignment')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                    warningsFilter === 'double_assignment'
+                      ? 'bg-purple-500 text-white'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-purple-400 hover:bg-slate-700' : 'bg-purple-50 text-purple-600 hover:bg-purple-100')
+                  }`}
+                >
+                  Double ({warningsSummary.byType['double_assignment']})
+                </button>
+              )}
+              {warningsSummary.byType['understaffed'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('understaffed')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                    warningsFilter === 'understaffed'
+                      ? 'bg-blue-500 text-white'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-blue-400 hover:bg-slate-700' : 'bg-blue-50 text-blue-600 hover:bg-blue-100')
+                  }`}
+                >
+                  Understaffed ({warningsSummary.byType['understaffed']})
+                </button>
+              )}
+              {warningsSummary.byType['overstaffed'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('overstaffed')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                    warningsFilter === 'overstaffed'
+                      ? 'bg-purple-500 text-white'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-purple-400 hover:bg-slate-700' : 'bg-purple-50 text-purple-600 hover:bg-purple-100')
+                  }`}
+                >
+                  Overstaffed ({warningsSummary.byType['overstaffed']})
+                </button>
+              )}
+            </div>
+
+            {/* Warnings List - Grouped by Day */}
+            <div className={`rounded-xl mb-6 max-h-80 overflow-y-auto ${
+              theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'
+            }`}>
+              {filteredWarnings.length === 0 ? (
+                /* Empty State with Celebration */
+                scheduleWarnings.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${
+                      theme === 'Midnight' ? 'bg-emerald-500/20' : 'bg-emerald-100'
+                    }`}>
+                      <PartyPopper className={`h-8 w-8 ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+                    </div>
+                    <h4 className={`text-lg font-bold mb-2 ${styles.text}`}>Perfect Schedule!</h4>
+                    <p className={`text-sm ${styles.muted} max-w-xs`}>
+                      No conflicts detected. Your schedule meets all requirements and is ready for publishing.
+                    </p>
+                    <div className={`mt-4 px-4 py-2 rounded-lg text-xs ${
+                      theme === 'Midnight' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      <Sparkles className="h-3 w-3 inline mr-1" /> All operators have valid skills for their assignments
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-8 px-6 text-center">
+                    <Filter className={`h-8 w-8 mb-3 ${theme === 'Midnight' ? 'text-slate-600' : 'text-gray-400'}`} />
+                    <p className={`text-sm ${styles.muted}`}>No warnings match this filter</p>
+                    <button
+                      onClick={() => setWarningsFilter('all')}
+                      className={`mt-2 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                        theme === 'Midnight' ? 'text-indigo-400 hover:bg-slate-700' : 'text-blue-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      Show all warnings
+                    </button>
+                  </div>
+                )
+              ) : (
+                /* Grouped Warnings List */
+                <div className="p-3 space-y-4">
+                  {warningsGroupedByDay.map((group, groupIdx) => (
+                    <div key={group.day} style={{ animationDelay: `${groupIdx * 50}ms` }} className="animate-in fade-in slide-in-from-bottom-2">
+                      {/* Day Header */}
+                      <div className={`flex items-center gap-2 mb-2 px-1`}>
+                        <Calendar className={`h-3.5 w-3.5 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`} />
+                        <span className={`text-xs font-semibold uppercase tracking-wide ${
+                          theme === 'Midnight' ? 'text-slate-400' : 'text-gray-500'
+                        }`}>
+                          {group.dayLabel}
+                        </span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                          theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+                        }`}>
+                          {group.warnings.length}
+                        </span>
+                      </div>
+
+                      {/* Warnings for this day */}
+                      <div className="space-y-2">
+                        {group.warnings.map((warning, idx) => {
+                          const operator = operators.find(o => o.id === warning.operatorId);
+                          const task = tasks.find(t => t.id === warning.taskId);
+                          const severity = getWarningSeverity(warning.type);
+                          const isClickable = !!warning.operatorId && !!warning.day;
+                          const WarningIcon = getWarningIcon(warning.type);
+
+                          return (
+                            <div
+                              key={`${group.day}-${idx}`}
+                              onClick={() => {
+                                if (isClickable) {
+                                  setShowCriticalWarningsModal(false);
+                                  scrollToWarningCell(warning);
+                                }
+                              }}
+                              style={{ animationDelay: `${(groupIdx * 50) + (idx * 30)}ms` }}
+                              className={`group relative flex items-start gap-3 p-3 rounded-lg transition-all duration-200 animate-in fade-in slide-in-from-left-2 ${
+                                isClickable ? 'cursor-pointer hover:translate-x-1' : ''
+                              } ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-800 hover:bg-slate-750 border border-slate-700'
+                                  : 'bg-white hover:bg-gray-50 border border-gray-200'
+                              }`}
+                            >
+                              {/* Left Border Accent */}
+                              <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${
+                                severity === 'critical' ? 'bg-red-500' :
+                                severity === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
+                              }`} />
+
+                              {/* Icon */}
+                              <div className={`flex-shrink-0 p-1.5 rounded-lg ${
+                                severity === 'critical'
+                                  ? (theme === 'Midnight' ? 'bg-red-500/20 text-red-400' : 'bg-red-100 text-red-600')
+                                  : severity === 'warning'
+                                    ? (theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-600')
+                                    : (theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600')
+                              }`}>
+                                <WarningIcon className="h-4 w-4" />
+                              </div>
+
+                              {/* Content */}
+                              <div className="flex-1 min-w-0 pl-1">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <span className={`text-sm font-semibold ${styles.text}`}>
+                                    {getWarningLabel(warning.type)}
+                                  </span>
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                    severity === 'critical'
+                                      ? (theme === 'Midnight' ? 'bg-red-500/20 text-red-400' : 'bg-red-100 text-red-600')
+                                      : severity === 'warning'
+                                        ? (theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-600')
+                                        : (theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600')
+                                  }`}>
+                                    {severity}
+                                  </span>
+                                </div>
+                                <p className={`text-xs ${styles.muted} leading-relaxed`}>
+                                  {warning.message}
+                                </p>
+
+                                {/* Quick Actions */}
+                                <div className={`flex items-center gap-2 mt-2 transition-opacity opacity-0 group-hover:opacity-100`}>
+                                  {canQuickFix(warning) && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleQuickFix(warning, 'remove');
+                                      }}
+                                      className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                                        theme === 'Midnight'
+                                          ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                          : 'bg-red-100 text-red-600 hover:bg-red-200'
+                                      }`}
+                                      aria-label="Remove assignment"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      <span>Remove</span>
+                                    </button>
+                                  )}
+                                  {isClickable && (
+                                    <span className={`flex items-center gap-1 text-xs ${
+                                      theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'
+                                    }`}>
+                                      <MousePointerClick className="h-3 w-3" />
+                                      <span>Click to go</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Arrow indicator */}
+                              {isClickable && (
+                                <ArrowRight className={`h-4 w-4 shrink-0 mt-1 transition-transform group-hover:translate-x-1 ${
+                                  theme === 'Midnight' ? 'text-slate-600 group-hover:text-slate-400' : 'text-gray-400 group-hover:text-gray-600'
+                                }`} />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCriticalWarningsModal(false)}
+                className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${
+                  theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                Fix Issues
+              </button>
+              <button
+                onClick={() => {
+                  setWarningsAcknowledged(true);
+                  setShowCriticalWarningsModal(false);
+                  setShowPublishModal(true);
+                }}
+                className={`flex-1 py-2.5 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 ${
+                  hasCriticalWarnings
+                    ? (theme === 'Midnight' ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-red-600 hover:bg-red-700 text-white')
+                    : (theme === 'Midnight' ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white')
+                }`}
+              >
+                <Check className="h-4 w-4" />
+                Acknowledge & Publish
+              </button>
+            </div>
+          </div>
+        </div>,
+        getModalPortalContainer()
+      )}
+
+      {/* Warnings View Modal - Opens from warning badge */}
+      {showWarningsModal && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="warnings-modal-title"
+          aria-describedby="warnings-modal-desc"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setShowWarningsModal(false);
+            }
+            // Focus trap
+            if (e.key === 'Tab') {
+              const modal = e.currentTarget.querySelector('[data-modal-content]');
+              if (!modal) return;
+              const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+              const first = focusable[0] as HTMLElement;
+              const last = focusable[focusable.length - 1] as HTMLElement;
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last?.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first?.focus();
+              }
+            }
+          }}
+        >
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowWarningsModal(false)} aria-hidden="true" />
+          <div
+            data-modal-content
+            className={`relative w-full max-w-2xl rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-bottom-4 duration-300 ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setShowWarningsModal(false)}
+              className={`absolute top-4 right-4 p-1.5 rounded-lg transition-colors ${
+                theme === 'Midnight' ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            {/* Header with severity badges inline */}
+            <div className="flex items-start gap-4 mb-5">
+              <div className={`p-2.5 rounded-xl ${
+                hasCriticalWarnings
+                  ? (theme === 'Midnight' ? 'bg-red-500/30' : 'bg-red-100')
+                  : (theme === 'Midnight' ? 'bg-amber-500/30' : 'bg-amber-100')
+              }`}>
+                <AlertTriangle className={`h-6 w-6 ${
+                  hasCriticalWarnings
+                    ? (theme === 'Midnight' ? 'text-red-400' : 'text-red-600')
+                    : (theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600')
+                }`} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 id="warnings-modal-title" className={`text-xl font-bold ${styles.text}`}>
+                    Schedule Warnings
+                  </h3>
+                  {/* Severity Summary - moved inline */}
+                  <div className="flex items-center gap-2" role="status" aria-live="polite">
+                    {warningsSummary.critical > 0 && (
+                      <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
+                        theme === 'Midnight' ? 'bg-red-500/30 text-red-400 border border-red-500/40' : 'bg-red-100 text-red-700 border border-red-200'
+                      }`}>
+                        {warningsSummary.critical} Critical
+                      </span>
+                    )}
+                    {warningsSummary.warning > 0 && (
+                      <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
+                        theme === 'Midnight' ? 'bg-amber-500/30 text-amber-400 border border-amber-500/40' : 'bg-amber-100 text-amber-700 border border-amber-200'
+                      }`}>
+                        {warningsSummary.warning} Warning
+                      </span>
+                    )}
+                    {warningsSummary.info > 0 && (
+                      <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
+                        theme === 'Midnight' ? 'bg-blue-500/30 text-blue-400 border border-blue-500/40' : 'bg-blue-100 text-blue-700 border border-blue-200'
+                      }`}>
+                        {warningsSummary.info} Info
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p id="warnings-modal-desc" className={`text-sm ${styles.muted}`}>
+                  {scheduleWarnings.length} {scheduleWarnings.length === 1 ? 'issue' : 'issues'} found in the current schedule.
+                </p>
+              </div>
+            </div>
+
+            {/* Filter Toggles - improved visual states */}
+            <div className="flex flex-wrap items-center gap-2 mb-4" role="group" aria-label="Filter warnings">
+              <button
+                onClick={() => setWarningsFilter('all')}
+                aria-pressed={warningsFilter === 'all'}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                  warningsFilter === 'all'
+                    ? (theme === 'Midnight' ? 'bg-indigo-500 text-white shadow-md ring-2 ring-indigo-400/50' : 'bg-blue-600 text-white shadow-md ring-2 ring-blue-300')
+                    : (theme === 'Midnight' ? 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-300' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800')
+                }`}
+              >
+                All ({scheduleWarnings.length})
+              </button>
+              {warningsSummary.byType['skill_mismatch'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('skill_mismatch')}
+                  aria-pressed={warningsFilter === 'skill_mismatch'}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                    warningsFilter === 'skill_mismatch'
+                      ? 'bg-red-500 text-white shadow-md ring-2 ring-red-300'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-red-400 hover:bg-slate-700 hover:text-red-300' : 'bg-red-50 text-red-600 hover:bg-red-100')
+                  }`}
+                >
+                  Skill ({warningsSummary.byType['skill_mismatch']})
+                </button>
+              )}
+              {warningsSummary.byType['availability_conflict'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('availability_conflict')}
+                  aria-pressed={warningsFilter === 'availability_conflict'}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                    warningsFilter === 'availability_conflict'
+                      ? 'bg-orange-500 text-white shadow-md ring-2 ring-orange-300'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-orange-400 hover:bg-slate-700 hover:text-orange-300' : 'bg-orange-50 text-orange-600 hover:bg-orange-100')
+                  }`}
+                >
+                  Availability ({warningsSummary.byType['availability_conflict']})
+                </button>
+              )}
+              {warningsSummary.byType['double_assignment'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('double_assignment')}
+                  aria-pressed={warningsFilter === 'double_assignment'}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                    warningsFilter === 'double_assignment'
+                      ? 'bg-purple-500 text-white shadow-md ring-2 ring-purple-300'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-purple-400 hover:bg-slate-700 hover:text-purple-300' : 'bg-purple-50 text-purple-600 hover:bg-purple-100')
+                  }`}
+                >
+                  Double ({warningsSummary.byType['double_assignment']})
+                </button>
+              )}
+              {warningsSummary.byType['understaffed'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('understaffed')}
+                  aria-pressed={warningsFilter === 'understaffed'}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                    warningsFilter === 'understaffed'
+                      ? 'bg-blue-500 text-white shadow-md ring-2 ring-blue-300'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-blue-400 hover:bg-slate-700 hover:text-blue-300' : 'bg-blue-50 text-blue-600 hover:bg-blue-100')
+                  }`}
+                >
+                  Understaffed ({warningsSummary.byType['understaffed']})
+                </button>
+              )}
+              {warningsSummary.byType['overstaffed'] > 0 && (
+                <button
+                  onClick={() => setWarningsFilter('overstaffed')}
+                  aria-pressed={warningsFilter === 'overstaffed'}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                    warningsFilter === 'overstaffed'
+                      ? 'bg-purple-500 text-white shadow-md ring-2 ring-purple-300'
+                      : (theme === 'Midnight' ? 'bg-slate-800 text-purple-400 hover:bg-slate-700 hover:text-purple-300' : 'bg-purple-50 text-purple-600 hover:bg-purple-100')
+                  }`}
+                >
+                  Overstaffed ({warningsSummary.byType['overstaffed']})
+                </button>
+              )}
+            </div>
+
+            {/* Warnings List - Grouped by Day */}
+            <div className={`rounded-xl mb-4 max-h-96 overflow-y-auto ${
+              theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'
+            }`}>
+              {filteredWarnings.length === 0 ? (
+                scheduleWarnings.length === 0 ? (
+                  /* Enhanced empty state with celebration */
+                  <div className="flex flex-col items-center justify-center py-12 px-6 text-center animate-in fade-in duration-300">
+                    <div className={`p-4 rounded-full mb-4 ${
+                      theme === 'Midnight' ? 'bg-emerald-500/20' : 'bg-emerald-100'
+                    }`}>
+                      <PartyPopper className={`h-10 w-10 ${
+                        theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'
+                      }`} />
+                    </div>
+                    <h4 className={`text-lg font-bold mb-2 ${styles.text}`}>
+                      All Clear!
+                    </h4>
+                    <p className={`text-sm ${styles.muted} max-w-xs`}>
+                      No warnings found in the schedule. Everything looks good to go.
+                    </p>
+                    <div className={`mt-4 px-4 py-2 rounded-lg text-xs ${
+                      theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      <Sparkles className="h-3 w-3 inline mr-1" /> All operators have valid skills for their assignments
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+                    <Filter className={`h-8 w-8 mb-3 ${theme === 'Midnight' ? 'text-slate-600' : 'text-gray-400'}`} />
+                    <p className={`text-sm font-medium ${styles.muted}`}>No warnings match this filter</p>
+                    <p className={`text-xs mt-1 ${theme === 'Midnight' ? 'text-slate-600' : 'text-gray-400'}`}>
+                      Showing 0 of {scheduleWarnings.length} warnings
+                    </p>
+                    <button
+                      onClick={() => setWarningsFilter('all')}
+                      className={`mt-3 text-xs font-semibold px-4 py-2 rounded-lg transition-colors ${
+                        theme === 'Midnight' ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30' : 'bg-blue-100 text-blue-600 hover:bg-blue-200'
+                      }`}
+                    >
+                      Show all warnings
+                    </button>
+                  </div>
+                )
+              ) : (
+                /* Grouped Warnings List */
+                <div className="p-4 space-y-5">
+                  {warningsGroupedByDay.map((group, groupIdx) => (
+                    <div
+                      key={group.day}
+                      style={{ animationDelay: `${groupIdx * 80}ms` }}
+                      className={`animate-in fade-in slide-in-from-bottom-2 ${
+                        groupIdx > 0 ? `pt-5 border-t ${theme === 'Midnight' ? 'border-slate-700/50' : 'border-gray-200'}` : ''
+                      }`}
+                    >
+                      {/* Day Header */}
+                      <div className="flex items-center gap-2 mb-3 px-1">
+                        <Calendar className={`h-4 w-4 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-400'}`} />
+                        <span className={`text-sm font-bold uppercase tracking-wide ${
+                          theme === 'Midnight' ? 'text-slate-300' : 'text-gray-600'
+                        }`}>
+                          {group.dayLabel}
+                        </span>
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          theme === 'Midnight' ? 'bg-slate-700 text-slate-300' : 'bg-gray-200 text-gray-600'
+                        }`}>
+                          {group.warnings.length}
+                        </span>
+                      </div>
+
+                      {/* Warnings for this day */}
+                      <div className="space-y-3">
+                        {group.warnings.map((warning, idx) => {
+                          const severity = getWarningSeverity(warning.type);
+                          const isClickable = !!warning.operatorId && !!warning.day;
+                          const WarningIcon = getWarningIcon(warning.type);
+                          const hasQuickFix = canQuickFix(warning);
+
+                          return (
+                            <div
+                              key={`${group.day}-${idx}`}
+                              role={isClickable ? 'button' : undefined}
+                              tabIndex={isClickable ? 0 : undefined}
+                              onClick={() => {
+                                if (isClickable) {
+                                  setShowWarningsModal(false);
+                                  scrollToWarningCell(warning);
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (isClickable && (e.key === 'Enter' || e.key === ' ')) {
+                                  e.preventDefault();
+                                  setShowWarningsModal(false);
+                                  scrollToWarningCell(warning);
+                                }
+                              }}
+                              aria-label={`${severity} warning: ${warning.message}${isClickable ? '. Press Enter to navigate.' : ''}`}
+                              style={{ animationDelay: `${(groupIdx * 80) + (idx * 50)}ms` }}
+                              className={`group relative flex items-start gap-3 p-4 rounded-xl transition-all duration-200 animate-in fade-in slide-in-from-left-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 ${
+                                isClickable ? 'cursor-pointer hover:translate-x-1 hover:shadow-md' : ''
+                              } ${
+                                theme === 'Midnight'
+                                  ? 'bg-slate-800 hover:bg-slate-750 border border-slate-700'
+                                  : 'bg-white hover:bg-gray-50 border border-gray-200 shadow-sm'
+                              }`}
+                            >
+                              {/* Left Border Accent */}
+                              <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl ${
+                                severity === 'critical' ? 'bg-red-500' :
+                                severity === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
+                              }`} />
+
+                              {/* Icon */}
+                              <div className={`flex-shrink-0 p-2 rounded-lg ${
+                                severity === 'critical'
+                                  ? (theme === 'Midnight' ? 'bg-red-500/30 text-red-400' : 'bg-red-100 text-red-600')
+                                  : severity === 'warning'
+                                    ? (theme === 'Midnight' ? 'bg-amber-500/30 text-amber-400' : 'bg-amber-100 text-amber-600')
+                                    : (theme === 'Midnight' ? 'bg-blue-500/30 text-blue-400' : 'bg-blue-100 text-blue-600')
+                              }`}>
+                                <WarningIcon className="h-4 w-4" />
+                              </div>
+
+                              {/* Content */}
+                              <div className="flex-1 min-w-0 pl-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className={`text-sm font-medium ${styles.text}`}>
+                                    {getWarningLabel(warning.type)}
+                                  </span>
+                                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                    severity === 'critical'
+                                      ? (theme === 'Midnight' ? 'bg-red-500/30 text-red-400 border border-red-500/40' : 'bg-red-100 text-red-700 border border-red-200')
+                                      : severity === 'warning'
+                                        ? (theme === 'Midnight' ? 'bg-amber-500/30 text-amber-400 border border-amber-500/40' : 'bg-amber-100 text-amber-700 border border-amber-200')
+                                        : (theme === 'Midnight' ? 'bg-blue-500/30 text-blue-400 border border-blue-500/40' : 'bg-blue-100 text-blue-700 border border-blue-200')
+                                  }`}>
+                                    {severity}
+                                  </span>
+                                </div>
+                                <p className={`text-sm ${styles.muted} leading-relaxed`}>
+                                  {warning.message}
+                                </p>
+
+                                {/* Quick Actions - always visible at reduced opacity */}
+                                {(hasQuickFix || isClickable) && (
+                                  <div className={`flex items-center gap-3 mt-3 transition-opacity ${
+                                    hasQuickFix ? 'opacity-60 group-hover:opacity-100' : 'opacity-40 group-hover:opacity-70'
+                                  }`}>
+                                    {hasQuickFix && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleQuickFix(warning, 'remove');
+                                        }}
+                                        className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${
+                                          theme === 'Midnight'
+                                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/40 focus-visible:ring-red-400'
+                                            : 'bg-red-100 text-red-600 hover:bg-red-200 focus-visible:ring-red-500'
+                                        }`}
+                                        aria-label={`Remove assignment for ${warning.message}`}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        <span>Remove</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Arrow indicator - always visible */}
+                              {isClickable && (
+                                <ArrowRight className={`h-5 w-5 shrink-0 mt-1 transition-all group-hover:translate-x-1 ${
+                                  theme === 'Midnight' ? 'text-slate-600 group-hover:text-indigo-400' : 'text-gray-300 group-hover:text-blue-500'
+                                }`} />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-2">
+              <button
+                onClick={() => setShowWarningsModal(false)}
+                className={`flex-1 py-3 rounded-xl font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 ${styles.primaryBtn}`}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>,
+        getModalPortalContainer()
+      )}
+
       {/* Export Modal */}
       <ExportModal
         isOpen={showExportModal}
@@ -3772,6 +8507,10 @@ function App() {
         theme={theme}
         operators={operators}
         tasks={tasks}
+        scheduleWarnings={scheduleWarnings}
+        warningsAcknowledged={warningsAcknowledged}
+        onAcknowledgeWarnings={() => setWarningsAcknowledged(true)}
+        onReviewWarnings={() => setShowWarningsModal(true)}
       />
 
       {/* Planning Modal */}
@@ -3779,11 +8518,35 @@ function App() {
         isOpen={showPlanningModal}
         onClose={() => setShowPlanningModal(false)}
         onApply={handlePlanApply}
-        tasks={tasks}
+        operators={operators}
         weekNumber={currentWeek.weekNumber}
         year={currentWeek.year}
         theme={theme}
-        existingRequirements={taskRequirements}
+        existingConfig={weeklyPlanningConfigs[`${currentWeek.year}-W${currentWeek.weekNumber}`]}
+        existingExclusions={weeklyExclusions[`${currentWeek.year}-W${currentWeek.weekNumber}`]}
+        skills={skills}
+        templates={planningTemplates}
+        onSaveTemplate={async (template) => {
+          await savePlanningTemplate(template);
+          setPlanningTemplates(await getAllPlanningTemplates());
+          toast.success(`Template "${template.name}" saved`);
+        }}
+        onDeleteTemplate={async (id) => {
+          const template = planningTemplates.find(t => t.id === id);
+          await deletePlanningTemplate(id);
+          setPlanningTemplates(await getAllPlanningTemplates());
+          toast.info(`Template "${template?.name || 'Unknown'}" deleted`);
+        }}
+        onLoadTemplates={getAllPlanningTemplates}
+      />
+
+      {/* Feedback Modal */}
+      <FeedbackModal
+        isOpen={showFeedbackModal}
+        onClose={() => setShowFeedbackModal(false)}
+        onSubmit={handleSubmitFeedback}
+        currentPage={activeTab}
+        isDark={theme === 'Midnight'}
       />
 
       {/* Clear Data Confirmation Modal */}
@@ -3816,6 +8579,32 @@ function App() {
               </ul>
             </div>
 
+            {/* Backup Prompt */}
+            <div className={`p-4 rounded-xl mb-4 flex items-center gap-3 ${theme === 'Midnight' ? 'bg-emerald-950/30 border border-emerald-900/50' : 'bg-emerald-50 border border-emerald-200'}`}>
+              <Download className={`h-5 w-5 shrink-0 ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+              <div className="flex-1 min-w-0">
+                <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-700'}`}>
+                  Create a backup first?
+                </p>
+                <p className={`text-xs ${theme === 'Midnight' ? 'text-emerald-400/70' : 'text-emerald-600/70'}`}>
+                  Export your data before deleting
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await exportData();
+                    addToast('success', 'Backup created successfully');
+                  } catch (err) {
+                    addToast('error', 'Failed to export backup');
+                  }
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors shrink-0 ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+              >
+                Export
+              </button>
+            </div>
+
             <div className="flex gap-3">
               <button
                 onClick={() => setShowClearDataModal(false)}
@@ -3838,6 +8627,335 @@ function App() {
               >
                 <Trash2 className="inline-block h-4 w-4 mr-2" />
                 Delete Everything
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Task Confirmation Modal */}
+      {taskToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-sm rounded-2xl p-6 shadow-2xl ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className={`p-3 rounded-full ${theme === 'Midnight' ? 'bg-red-500/10' : 'bg-red-100'}`}>
+                <Trash2 className={`h-5 w-5 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-600'}`} />
+              </div>
+              <div>
+                <h3 className={`text-lg font-bold ${styles.text}`}>
+                  Delete Task?
+                </h3>
+              </div>
+            </div>
+
+            <p className={`text-sm mb-4 ${styles.muted}`}>
+              Are you sure you want to delete <span className="font-semibold" style={{ color: taskToDelete.color }}>{taskToDelete.name}</span>? This action cannot be undone.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setTaskToDelete(null)}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setTasks(tasks.filter(t => t.id !== taskToDelete.id));
+                  setTaskToDelete(null);
+                  addToast('success', `"${taskToDelete.name}" deleted`);
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Skill Confirmation Modal */}
+      {skillToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-sm rounded-2xl p-6 shadow-2xl ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className={`p-3 rounded-full ${theme === 'Midnight' ? 'bg-red-500/10' : 'bg-red-100'}`}>
+                <Trash2 className={`h-5 w-5 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-600'}`} />
+              </div>
+              <div>
+                <h3 className={`text-lg font-bold ${styles.text}`}>
+                  Delete Skill?
+                </h3>
+              </div>
+            </div>
+
+            <p className={`text-sm mb-4 ${styles.muted}`}>
+              Are you sure you want to delete <span className={`font-semibold ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`}>"{skillToDelete}"</span>?
+              This will remove the skill from all operators who have it.
+            </p>
+
+            {/* Show affected operators count */}
+            {(() => {
+              const affectedOps = operators.filter(op => op.skills.includes(skillToDelete));
+              const affectedTasks = tasks.filter(t => t.requiredSkill === skillToDelete);
+              return (affectedOps.length > 0 || affectedTasks.length > 0) && (
+                <div className={`p-3 rounded-lg mb-4 ${theme === 'Midnight' ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-amber-50 border border-amber-200'}`}>
+                  <p className={`text-sm ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-700'}`}>
+                    <AlertTriangle className="inline-block w-4 h-4 mr-1" />
+                    This will affect {affectedOps.length} operator{affectedOps.length !== 1 ? 's' : ''}
+                    {affectedTasks.length > 0 && ` and ${affectedTasks.length} task${affectedTasks.length !== 1 ? 's' : ''}`}.
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* Block deletion if tasks use this skill */}
+            {(() => {
+              const tasksUsingSkill = tasks.filter(t => t.requiredSkill === skillToDelete);
+              if (tasksUsingSkill.length > 0) {
+                return (
+                  <div className={`p-4 rounded-xl border ${theme === 'Midnight' ? 'bg-red-950/30 border-red-900/50' : 'bg-red-50 border-red-200'}`}>
+                    <p className={`text-sm font-medium mb-2 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-700'}`}>
+                      Cannot delete this skill
+                    </p>
+                    <p className={`text-sm ${theme === 'Midnight' ? 'text-red-400/80' : 'text-red-600'}`}>
+                      The following task{tasksUsingSkill.length !== 1 ? 's' : ''} require{tasksUsingSkill.length === 1 ? 's' : ''} this skill:
+                    </p>
+                    <ul className={`mt-2 text-sm space-y-1 ${theme === 'Midnight' ? 'text-red-400/80' : 'text-red-600'}`}>
+                      {tasksUsingSkill.slice(0, 5).map(t => (
+                        <li key={t.id} className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
+                          {t.name}
+                        </li>
+                      ))}
+                      {tasksUsingSkill.length > 5 && (
+                        <li className="italic">...and {tasksUsingSkill.length - 5} more</li>
+                      )}
+                    </ul>
+                    <p className={`text-xs mt-3 ${theme === 'Midnight' ? 'text-slate-500' : 'text-gray-500'}`}>
+                      Reassign these tasks to a different skill first.
+                    </p>
+                    <button
+                      onClick={() => setSkillToDelete(null)}
+                      className={`w-full mt-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                    >
+                      Close
+                    </button>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            {/* Only show delete buttons if no tasks use this skill */}
+            {tasks.filter(t => t.requiredSkill === skillToDelete).length === 0 && (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setSkillToDelete(null)}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    // Remove skill from skills list
+                    const updated = skills.filter(s => s !== skillToDelete);
+                    setSkills(updated);
+                    saveSkills(updated);
+                    // Remove skill from all operators
+                    setOperators(operators.map(op => ({
+                      ...op,
+                      skills: op.skills.filter(s => s !== skillToDelete)
+                    })));
+                    setSkillToDelete(null);
+                    addToast('success', `Skill "${skillToDelete}" deleted`);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Fill Gaps Preview Modal */}
+      {showFillGapsPreview && fillGapsResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            {/* Header */}
+            <div className={`p-4 border-b ${theme === 'Midnight' ? 'border-slate-800 bg-slate-900/50' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-blue-500/20' : 'bg-blue-100'}`}>
+                    <Grid className={`h-5 w-5 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
+                  </div>
+                  <div>
+                    <h3 className={`text-lg font-bold ${styles.text}`}>Fill Gaps Preview</h3>
+                    <p className={`text-sm ${styles.muted}`}>
+                      {fillGapsResult.stats.totalEmptyCells} empty cells found, {fillGapsResult.stats.filledCells} can be filled
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowFillGapsPreview(false);
+                    setFillGapsResult(null);
+                  }}
+                  className={`p-2 rounded-lg transition-colors ${theme === 'Midnight' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-500'}`}
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 max-h-[60vh] overflow-y-auto">
+              {/* Stats Summary */}
+              <div className={`grid grid-cols-3 gap-3 mb-4 p-3 rounded-xl ${theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-100'}`}>
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`}>
+                    {fillGapsResult.stats.totalEmptyCells}
+                  </div>
+                  <div className={`text-xs ${styles.muted}`}>Empty Cells</div>
+                </div>
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                    {fillGapsResult.stats.filledCells}
+                  </div>
+                  <div className={`text-xs ${styles.muted}`}>Can Fill</div>
+                </div>
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`}>
+                    {fillGapsResult.stats.unfilledCells}
+                  </div>
+                  <div className={`text-xs ${styles.muted}`}>Cannot Fill</div>
+                </div>
+              </div>
+
+              {/* Rule Compliance Summary */}
+              {fillGapsResult.stats.filledCells > 0 && (
+                <div className={`flex items-center justify-center gap-6 mb-4 py-2 px-4 rounded-lg ${theme === 'Midnight' ? 'bg-slate-800/30' : 'bg-gray-50'}`}>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className={`h-4 w-4 ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+                    <span className={`text-sm ${styles.text}`}>
+                      <span className="font-semibold">{fillGapsResult.stats.followedAllRules}</span> followed all rules
+                    </span>
+                  </div>
+                  {fillGapsResult.stats.requiredRelaxing > 0 && (
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className={`h-4 w-4 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
+                      <span className={`text-sm ${styles.text}`}>
+                        <span className="font-semibold">{fillGapsResult.stats.requiredRelaxing}</span> required relaxing
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Proposed Assignments */}
+              {fillGapsResult.assignments.length > 0 && (
+                <div className="mb-4">
+                  <h4 className={`text-sm font-semibold mb-2 ${styles.text}`}>Proposed Assignments</h4>
+                  <div className="space-y-2">
+                    {fillGapsResult.assignments.map((assignment, idx) => {
+                      const ruleNames: Record<SoftRuleType, string> = {
+                        'avoid-consecutive-same-task': 'Avoid consecutive same task',
+                        'task-variety': 'Task variety',
+                        'workload-balance': 'Workload balance',
+                        'avoid-consecutive-heavy': 'Avoid consecutive heavy tasks',
+                      };
+                      return (
+                        <div
+                          key={idx}
+                          className={`flex items-center justify-between p-3 rounded-lg ${theme === 'Midnight' ? 'bg-slate-800/50' : 'bg-gray-50'}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            {/* Rule compliance indicator */}
+                            {assignment.followedAllRules ? (
+                              <CheckCircle2 className={`h-4 w-4 flex-shrink-0 ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-600'}`} />
+                            ) : (
+                              <div className="relative group">
+                                <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
+                                {/* Tooltip showing broken rules */}
+                                <div className={`absolute bottom-full left-0 mb-2 px-2 py-1 rounded text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 ${theme === 'Midnight' ? 'bg-slate-700 text-slate-200' : 'bg-gray-800 text-white'}`}>
+                                  Relaxed: {assignment.brokenRules.map(r => ruleNames[r]).join(', ')}
+                                </div>
+                              </div>
+                            )}
+                            <span className={`text-sm font-medium ${styles.text}`}>{assignment.operatorName}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-600'}`}>
+                              {assignment.day}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <ArrowRight className={`h-4 w-4 ${styles.muted}`} />
+                            <span
+                              className="text-sm font-medium px-3 py-1 rounded-lg text-white"
+                              style={{ backgroundColor: assignment.taskColor }}
+                            >
+                              {assignment.taskName}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Unfillable Gaps */}
+              {fillGapsResult.unfillableGaps.length > 0 && (
+                <div>
+                  <h4 className={`text-sm font-semibold mb-2 flex items-center gap-2 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-700'}`}>
+                    <AlertTriangle className="h-4 w-4" />
+                    Cannot Fill ({fillGapsResult.unfillableGaps.length})
+                  </h4>
+                  <div className={`p-3 rounded-lg ${theme === 'Midnight' ? 'bg-amber-950/30 border border-amber-900/50' : 'bg-amber-50 border border-amber-200'}`}>
+                    <div className="space-y-1">
+                      {fillGapsResult.unfillableGaps.slice(0, 5).map((gap, idx) => (
+                        <div key={idx} className={`text-sm ${theme === 'Midnight' ? 'text-amber-400/80' : 'text-amber-700'}`}>
+                          <span className="font-medium">{gap.operatorName}</span> ({gap.day}): {gap.reason}
+                        </div>
+                      ))}
+                      {fillGapsResult.unfillableGaps.length > 5 && (
+                        <div className={`text-xs italic ${theme === 'Midnight' ? 'text-amber-400/60' : 'text-amber-600'}`}>
+                          ...and {fillGapsResult.unfillableGaps.length - 5} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {fillGapsResult.stats.totalEmptyCells === 0 && (
+                <div className={`text-center py-8 ${styles.muted}`}>
+                  <CheckCircle2 className={`h-12 w-12 mx-auto mb-3 ${theme === 'Midnight' ? 'text-emerald-400' : 'text-emerald-500'}`} />
+                  <p className={`text-lg font-medium ${styles.text}`}>No empty cells found!</p>
+                  <p className="text-sm">All operators have assignments for this week.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className={`p-4 border-t flex gap-3 ${theme === 'Midnight' ? 'border-slate-800 bg-slate-900/50' : 'border-gray-200 bg-gray-50'}`}>
+              <button
+                onClick={() => {
+                  setShowFillGapsPreview(false);
+                  setFillGapsResult(null);
+                }}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApplyFillGaps}
+                disabled={fillGapsResult.stats.filledCells === 0}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${theme === 'Midnight' ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+              >
+                Apply {fillGapsResult.stats.filledCells} Assignment{fillGapsResult.stats.filledCells !== 1 ? 's' : ''}
               </button>
             </div>
           </div>

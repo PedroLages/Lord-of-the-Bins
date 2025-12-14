@@ -145,32 +145,120 @@
 
 ---
 
+## Phase 8: Authentication & User Management
+
+> **Reference:** See REQUIREMENTS.md for full Permission Matrix and Authentication specs.
+
+### P1 - Critical (Login & Basic Auth)
+
+- [ ] Supabase Auth setup
+  - [ ] Configure Supabase project with Auth enabled
+  - [ ] Create `users` table with fields: id, user_code, email (optional), role, shift_id, name
+  - [ ] Set up Row Level Security (RLS) for shift isolation
+- [ ] User Code authentication
+  - [ ] Implement fake email pattern: `{user_code}@lotb.local`
+  - [ ] User Code + Password login form
+  - [ ] Email + Password alternative login
+  - [ ] Password reset via magic link (requires real email)
+- [ ] Login/Logout UI
+  - [ ] Login page with user code field
+  - [ ] Login page with email alternative
+  - [ ] Remember me checkbox
+  - [ ] Logout button in sidebar
+  - [ ] Display logged-in user in sidebar (name + role)
+- [ ] Session management
+  - [ ] Persist session across page refresh
+  - [ ] Auto-redirect to login when session expires
+  - [ ] Show loading state while checking auth
+
+### P1 - Critical (Role-Based Access)
+
+- [ ] Role definitions
+  - [ ] Team Leader role (per shift, NOT global admin)
+  - [ ] TC role (Team Coordinator)
+  - [ ] Store role in Supabase Auth metadata
+- [ ] Permission checks in UI
+  - [ ] Hide Team Leader-only buttons from TCs
+  - [ ] Permanent delete operator (Team Leader only)
+  - [ ] Permanent delete task (Team Leader only)
+  - [ ] Unlock ANY locked schedule (Team Leader only)
+  - [ ] Delete schedule history (Team Leader only)
+  - [ ] Invite new TC (Team Leader only)
+  - [ ] Import data (Team Leader only)
+  - [ ] Clear all data (Team Leader only)
+- [ ] Shift isolation
+  - [ ] Filter all data by user's shift_id
+  - [ ] RLS policies on operators, tasks, schedules tables
+  - [ ] Test that Shift A users cannot see Shift B data
+
+### P2 - Important (User Management)
+
+- [ ] Invite system
+  - [ ] Team Leader can generate invite links
+  - [ ] Invite includes pre-set role and shift
+  - [ ] User clicks link → set password → account created
+- [ ] User management UI (Team Leader only)
+  - [ ] View team members list
+  - [ ] Deactivate TC account
+  - [ ] Reset TC password
+  - [ ] Change TC role (future)
+- [ ] User settings UI (all users)
+  - [ ] Change own password
+  - [ ] Update profile (name, optional email)
+  - [ ] Theme preference (per user)
+
+### P2 - Important (Audit & Activity)
+
+- [ ] Activity log enhancements
+  - [ ] Track which user made each change
+  - [ ] Store user_id with each activity
+- [ ] Audit trail (Team Leader only)
+  - [ ] View full history across team
+  - [ ] Export audit reports
+
+### P3 - Nice to Have (UI Enhancements)
+
+- [ ] Collapsible sidebar with icons
+  - [ ] Collapse/expand toggle
+  - [ ] Icon-only mode when collapsed
+  - [ ] Persist preference
+- [ ] User avatar/initials in sidebar
+- [ ] Last login timestamp display
+- [ ] Force password change on first login
+
+---
+
 ## Future: Production Ready (Supabase Migration)
 
 ### P3 - Future
 
-- [ ] Supabase database setup
 - [ ] Migrate storage service to Supabase implementation
-- [ ] Authentication system (login/logout)
-- [ ] Role-based access (Team Leader vs TC)
-- [ ] Team/Shift isolation (each shift sees own data)
-- [ ] Real-time sync between users
+- [ ] Real-time sync between users (Supabase Realtime)
 - [ ] Automatic cloud backup
+- [ ] Offline support with sync queue
+
+### Future: BOL/CEVA API Integrations
+
+> **Potential integration with existing BOL/CEVA systems:**
+
+| Data Source | Integration Type | Purpose |
+|-------------|------------------|---------|
+| Employee Master Data | Import | Auto-sync operator names, codes, shifts |
+| Leave/Sick Systems | Import | Pre-populate unavailability |
+| Training Records | Import | Certified skills list |
+| HR Assignments | Import | Shift A/B membership |
 
 ---
 
 ## Strategic Planning & Research
 
-### Admin Dashboard (Team Leaders)
+### Team Leader Dashboard
 
-> **Goal:** Think deeply about what Team Leaders need that TCs don't have access to.
+> **Goal:** Think about what Team Leaders need (own shift only, NOT cross-shift).
 
-- [ ] What metrics/KPIs should admins see across ALL shifts?
-- [ ] Cross-shift comparison views (Shift A vs Shift B performance)
-- [ ] Workforce analytics (skill gaps, training needs, availability patterns)
-- [ ] Override capabilities (unlock TC-locked schedules, approve changes)
-- [ ] Audit trail / change history across all teams
-- [ ] Capacity planning (headcount vs demand forecasting)
+- [ ] Workforce analytics (skill gaps, training needs, availability trends)
+- [ ] Audit trail / change history for own team
+- [ ] Capacity planning (headcount vs demand)
 - [ ] Export/reporting features for management
 - [ ] Alert system for critical issues (understaffed shifts, no-shows)
 
@@ -191,28 +279,43 @@
   - Privacy implications of tracking operator performance?
 - [ ] **Decision:** ML yes/no and why
 
-### User Flows & Authentication
+---
 
-> **Goal:** Design the complete user journey from registration to daily use.
+## Security Improvements (Code Review Findings)
 
-- [ ] **User types & permissions:**
-  - Admin (Team Leader) - full access, all shifts
-  - TC (Team Coordinator) - own shift only
-  - Operator (future?) - view own schedule, request swaps?
-- [ ] **Authentication flow:**
-  - Registration process (invite-only? self-register?)
-  - Login (email/password? SSO? magic link?)
-  - Password reset flow
-  - Session management (auto-logout? remember me?)
-- [ ] **Onboarding:**
-  - First-time setup wizard for admins
-  - TC onboarding (assign to shift, explain features)
-  - Data migration from existing systems?
-- [ ] **User management:**
-  - Invite new users
-  - Assign roles
-  - Deactivate users
-  - Transfer ownership
+> **Source:** Pragmatic Code Review - Dec 2025
+
+### P1 - Critical (Must Fix)
+
+- [ ] Increase password minimum length from 4 to 8 characters
+  - File: `components/SetupPage.tsx`
+  - Add basic complexity requirements (uppercase, number, etc.)
+- [ ] Add prominent "Demo Authentication" warning in UI
+  - Show banner during setup that this is not production-ready auth
+  - Warn users not to use passwords they use elsewhere
+
+### P2 - Important (Should Address)
+
+- [ ] Replace SHA-256 with proper password hashing
+  - Current: Client-side SHA-256 (vulnerable to rainbow tables)
+  - Option A: Use PBKDF2 with WebCrypto API (client-side interim)
+  - Option B: Move to backend auth with bcrypt/argon2 (production)
+  - File: `services/authService.ts`
+- [ ] Add input sanitization for display name field
+  - Files: `LoginPage.tsx`, `SetupPage.tsx`
+  - Prevent XSS if data rendered without escaping
+- [ ] Add React Error Boundaries
+  - Wrap major feature areas (Schedule, Team, Settings)
+  - Prevent full app crash on component errors
+- [ ] Document session storage limitations
+  - Session stored in plain localStorage
+  - For production: use httpOnly cookies with server-side sessions
+
+### P3 - Nice to Have (Future)
+
+- [ ] Implement proper session management for production
+- [ ] Add rate limiting for login attempts
+- [ ] Add session expiry and refresh token logic
 
 ---
 
@@ -251,4 +354,4 @@
 
 ---
 
-*Last updated: Dec 9, 2025*
+*Last updated: Dec 13, 2025*

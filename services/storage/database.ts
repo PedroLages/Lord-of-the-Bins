@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, DemoUser, AppearanceSettings, WeeklyExclusions, FillGapsSettings, PlanningTemplate } from '../../types';
 import type { ActivityLogEntry } from '../activityLogService';
 import type { SchedulingRules } from '../schedulingService';
 
@@ -10,6 +10,9 @@ export interface AppSettings {
   id: 'app_settings'; // Single record with fixed ID
   theme: 'Modern' | 'Midnight';
   schedulingRules: SchedulingRules;
+  skills?: string[]; // Custom skills (if empty, uses INITIAL_SKILLS)
+  appearance?: AppearanceSettings; // Color palette and appearance settings
+  fillGapsSettings?: FillGapsSettings; // Soft rules for Fill Gaps feature
 }
 
 /**
@@ -25,6 +28,9 @@ export class LotBDatabase extends Dexie {
   settings!: Table<AppSettings, string>;
   activityLog!: Table<ActivityLogEntry, string>;
   taskRequirements!: Table<TaskRequirement, string>;
+  users!: Table<DemoUser, string>;
+  weeklyExclusions!: Table<WeeklyExclusions, string>;
+  planningTemplates!: Table<PlanningTemplate, string>;
 
   constructor() {
     super('LordOfTheBinsDB');
@@ -48,6 +54,42 @@ export class LotBDatabase extends Dexie {
       settings: 'id',
       activityLog: 'id, type, timestamp',
       taskRequirements: 'taskId', // Primary key is taskId (one requirement per task)
+    });
+
+    // Version 3 - Add users table for local auth
+    this.version(3).stores({
+      operators: 'id, name, type, status, archived',
+      tasks: 'id, name, requiredSkill',
+      schedules: 'id, [year+weekNumber], status',
+      settings: 'id',
+      activityLog: 'id, type, timestamp',
+      taskRequirements: 'taskId',
+      users: 'id, username', // Indexed by id and username for login lookup
+    });
+
+    // Version 4 - Add weekly exclusions table for leave management
+    this.version(4).stores({
+      operators: 'id, name, type, status, archived',
+      tasks: 'id, name, requiredSkill',
+      schedules: 'id, [year+weekNumber], status',
+      settings: 'id',
+      activityLog: 'id, type, timestamp',
+      taskRequirements: 'taskId',
+      users: 'id, username',
+      weeklyExclusions: 'id, [year+weekNumber]', // Compound index for week lookup
+    });
+
+    // Version 5 - Add planning templates table
+    this.version(5).stores({
+      operators: 'id, name, type, status, archived',
+      tasks: 'id, name, requiredSkill',
+      schedules: 'id, [year+weekNumber], status',
+      settings: 'id',
+      activityLog: 'id, type, timestamp',
+      taskRequirements: 'taskId',
+      users: 'id, username',
+      weeklyExclusions: 'id, [year+weekNumber]',
+      planningTemplates: 'id, name, createdAt', // Indexed by id, name, and createdAt for sorting
     });
   }
 }

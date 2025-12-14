@@ -25,3 +25,18 @@ npm-debug.log*
 
 # Cache
 .cache/
+
+# Playwright screenshots and test artifacts
+.playwright-mcp/
+test-results/
+playwright-report/
+
+# Local settings
+.claude/settings.local.json
+
+# Temporary analysis files
+*.md.bak
+Screenshot*.png
+
+# PDF exports
+*.pdf

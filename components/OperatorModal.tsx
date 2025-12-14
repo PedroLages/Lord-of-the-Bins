@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, CalendarDays, Activity } from 'lucide-react';
-import { Operator, INITIAL_SKILLS, TC_SKILLS, WeekDay } from '../types';
+import { X, Check, CalendarDays, Activity, Heart } from 'lucide-react';
+import { Operator, INITIAL_SKILLS, TC_SKILLS, WeekDay, MOCK_TASKS } from '../types';
 
 interface OperatorModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (operator: Operator) => void;
   operator?: Operator | null;
+  skills?: string[]; // Custom skills, defaults to INITIAL_SKILLS if not provided
 }
 
-const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, operator }) => {
+const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, operator, skills: customSkills }) => {
+  // Use provided skills or fall back to INITIAL_SKILLS
+  const availableSkills = customSkills || INITIAL_SKILLS;
   const [name, setName] = useState('');
   const [type, setType] = useState<Operator['type']>('Regular');
   const [status, setStatus] = useState<Operator['status']>('Active');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [preferredTasks, setPreferredTasks] = useState<string[]>([]);
   const [availability, setAvailability] = useState<Record<WeekDay, boolean>>({
     Mon: true, Tue: true, Wed: true, Thu: true, Fri: true
   });
@@ -48,12 +52,14 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
       setType(operator.type);
       setStatus(operator.status);
       setSelectedSkills(operator.skills);
+      setPreferredTasks(operator.preferredTasks || []);
       setAvailability(operator.availability || { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true });
     } else {
       setName('');
       setType('Regular');
       setStatus('Active');
       setSelectedSkills([]);
+      setPreferredTasks([]);
       setAvailability({ Mon: true, Tue: true, Wed: true, Thu: true, Fri: true });
     }
   }, [operator, isOpen]);
@@ -61,10 +67,18 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
   if (!isOpen) return null;
 
   const handleSkillToggle = (skill: string) => {
-    setSelectedSkills(prev => 
-      prev.includes(skill) 
-        ? prev.filter(s => s !== skill) 
+    setSelectedSkills(prev =>
+      prev.includes(skill)
+        ? prev.filter(s => s !== skill)
         : [...prev, skill]
+    );
+  };
+
+  const handlePreferredTaskToggle = (taskName: string) => {
+    setPreferredTasks(prev =>
+      prev.includes(taskName)
+        ? prev.filter(t => t !== taskName)
+        : [...prev, taskName]
     );
   };
 
@@ -83,6 +97,7 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
       type,
       status,
       skills: selectedSkills,
+      preferredTasks,
       availability
     });
     onClose();
@@ -91,13 +106,13 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div 
-        className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${animateIn ? 'opacity-100' : 'opacity-0'}`} 
+      <div
+        className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${animateIn ? 'opacity-100' : 'opacity-0'}`}
         onClick={onClose}
       />
 
       {/* Modal Card */}
-      <div 
+      <div
         className={`relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden transition-all duration-300 transform ${animateIn ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-4'}`}
       >
         <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50">
@@ -245,8 +260,8 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
                   - Coordinators: only TC skills (Process, People, Off Process, Process/AD)
                   - Regular/Flex: all skills EXCEPT TC skills */}
               {(type === 'Coordinator'
-                ? INITIAL_SKILLS.filter(skill => TC_SKILLS.includes(skill))
-                : INITIAL_SKILLS.filter(skill => !TC_SKILLS.includes(skill))
+                ? availableSkills.filter(skill => TC_SKILLS.includes(skill))
+                : availableSkills.filter(skill => !TC_SKILLS.includes(skill))
               ).map(skill => {
                  const isSelected = selectedSkills.includes(skill);
                  return (
@@ -267,6 +282,42 @@ const OperatorModal: React.FC<OperatorModalProps> = ({ isOpen, onClose, onSave, 
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Preferred Tasks Section */}
+          <div className="pt-2 border-t border-gray-100">
+            <div className="flex items-center justify-between mb-3">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Preferred Tasks (Optional)</label>
+              <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full font-medium">{preferredTasks.length} Selected</span>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Select tasks this operator prefers. They'll get priority for these assignments.</p>
+
+            <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
+              {/* Only show tasks that match the operator's selected skills */}
+              {MOCK_TASKS.filter(task => selectedSkills.includes(task.requiredSkill)).map(task => {
+                const isPreferred = preferredTasks.includes(task.name);
+                return (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => handlePreferredTaskToggle(task.name)}
+                    className={`group relative pl-3 pr-4 py-2 rounded-lg text-sm font-medium border transition-all duration-200 flex items-center gap-2 ${
+                      isPreferred
+                        ? 'bg-purple-50 border-purple-200 text-purple-700'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${isPreferred ? 'bg-purple-500 border-purple-500' : 'border-gray-300 bg-white'}`}>
+                      {isPreferred && <Heart className="w-2.5 h-2.5 text-white fill-white" />}
+                    </div>
+                    {task.name}
+                  </button>
+                );
+              })}
+              {MOCK_TASKS.filter(task => selectedSkills.includes(task.requiredSkill)).length === 0 && (
+                <p className="text-xs text-gray-400 italic">Select skills first to see available tasks</p>
+              )}
             </div>
           </div>
 

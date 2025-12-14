@@ -1,4 +1,4 @@
-import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement } from '../types';
+import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement, PlanBuilderViolation, FillGapsResult, FillGapsSettings } from '../types';
 
 // Configuration for the scheduling algorithm
 export interface SchedulingRules {
@@ -11,6 +11,8 @@ export interface SchedulingRules {
   balanceWorkload: boolean;
   autoAssignCoordinators: boolean; // Whether to auto-assign coordinators (TC) to their tasks
   randomizationFactor: number; // 0-20: adds variety to schedule generation
+  useV2Algorithm: boolean; // Use enhanced V2 algorithm with decay scoring and early filtering
+  prioritizeSkillVariety: boolean; // V2: Prioritize using all of operator's skills across the week
 }
 
 export const DEFAULT_RULES: SchedulingRules = {
@@ -23,6 +25,8 @@ export const DEFAULT_RULES: SchedulingRules = {
   balanceWorkload: true,
   autoAssignCoordinators: true, // TC auto-assignment enabled by default
   randomizationFactor: 10, // Default medium randomization
+  useV2Algorithm: false, // V2 disabled by default - enable in Settings to test
+  prioritizeSkillVariety: true, // V2: Use all operator skills - enabled by default
 };
 
 // Heavy tasks that should be rotated
@@ -53,7 +57,7 @@ interface ScheduleResult {
 }
 
 export interface ScheduleWarning {
-  type: 'skill_mismatch' | 'availability_conflict' | 'double_assignment' | 'understaffed' | 'consecutive_heavy';
+  type: 'skill_mismatch' | 'availability_conflict' | 'double_assignment' | 'understaffed' | 'overstaffed' | 'consecutive_heavy';
   message: string;
   day?: WeekDay;
   operatorId?: string;
@@ -205,9 +209,21 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       }
     });
 
+    // Helper to get required operators - prioritizes TaskRequirements over task's built-in property
+    const getRequiredForTask = (task: TaskType): number => {
+      const taskReq = taskRequirements.find(r => r.taskId === task.id && r.enabled !== false);
+      if (taskReq) {
+        const requirements = getRequirementsForDay(taskReq, day);
+        return getTotalFromRequirements(requirements);
+      }
+      return getRequiredOperatorsForDay(task, day);
+    };
+
     // Get tasks that still need more operators
     const tasksToAssign = tasks.filter(task => {
-      const required = getRequiredOperatorsForDay(task, day);
+      const required = getRequiredForTask(task);
+      // If required is 0, skip task entirely
+      if (required === 0) return false;
       const assigned = taskAssignedCount[task.id] || 0;
       return assigned < required;
     });
@@ -291,7 +307,7 @@ export function generateSmartSchedule(data: ScheduleRequestData): ScheduleResult
       const task = tasks.find(t => t.id === score.taskId);
       if (!task) return;
 
-      const required = getRequiredOperatorsForDay(task, day);
+      const required = getRequiredForTask(task);
       const currentlyAssigned = taskAssignmentsThisRound[score.taskId] || 0;
 
       // Skip if task has reached its required operators
@@ -395,7 +411,11 @@ function calculateAssignmentScore(
   const isHeavyTask = HEAVY_TASKS.includes(task.name);
   const lastTask = tracking.operatorLastTask[operator.id];
 
-  if (isHeavyTask && lastTask) {
+  // Flex operators with only 1 skill are exempt from rotation rules
+  // They have no other task options, so they must do the same task all week
+  const isFlexWithSingleSkill = operator.type === 'Flex' && operator.skills.length === 1;
+
+  if (isHeavyTask && lastTask && !isFlexWithSingleSkill) {
     // Check consecutive heavy shifts
     if (!rules.allowConsecutiveHeavyShifts) {
       const lastTaskObj = allTasks.find(t => t.id === lastTask.taskId);
@@ -467,10 +487,7 @@ function calculateAssignmentScore(
     for (const req of requirements) {
       if (req.count === 0) continue;
 
-      if (req.type === 'Any') {
-        // "Any" type - no specific preference
-        matchesNeededType = true;
-      } else if (req.type === operator.type) {
+      if (req.type === operator.type) {
         // Operator's type matches this requirement
         const currentCount = currentAssignments[req.type] || 0;
         if (currentCount < req.count) {
@@ -485,9 +502,8 @@ function calculateAssignmentScore(
       }
     }
 
-    // If operator's type has all slots filled and there's no "Any" slot open, penalize
+    // If operator's type has all slots filled, penalize
     if (allSlotsFilledForType && !matchesNeededType) {
-      // Check if there's unfilled "Any" slots
       const totalRequired = getTotalFromRequirements(requirements);
       const totalAssigned = Object.values(currentAssignments).reduce((sum, count) => sum + count, 0);
       if (totalAssigned >= totalRequired) {
@@ -582,6 +598,17 @@ export function validateSchedule(
         warnings.push({
           type: 'understaffed',
           message: `${task.name} needs ${required} operator${required > 1 ? 's' : ''} on ${day}, only ${assigned} assigned`,
+          day,
+          taskId: task.id,
+        });
+      }
+
+      // Check for overstaffed tasks - only when explicit requirements are configured
+      // This warns when more operators are assigned than planned
+      if (taskRequirements && taskRequirements[task.id] && required > 0 && assigned > required) {
+        warnings.push({
+          type: 'overstaffed',
+          message: `${task.name} has ${assigned} operator${assigned > 1 ? 's' : ''} on ${day}, but only ${required} planned`,
           day,
           taskId: task.id,
         });
@@ -823,4 +850,572 @@ function scheduleTCsAsGroup(
   });
 
   return assignments;
+}
+
+/**
+ * Main entry point for schedule generation
+ * Routes to V1 or V2 algorithm based on rules.useV2Algorithm flag
+ */
+export function generateOptimizedSchedule(data: ScheduleRequestData): ScheduleResult {
+  const rules = data.rules || DEFAULT_RULES;
+
+  if (rules.useV2Algorithm) {
+    return generateSmartScheduleV2(data);
+  }
+
+  return generateSmartSchedule(data);
+}
+
+/**
+ * Validate Plan Builder requirements against current schedule
+ */
+export function validatePlanBuilderRequirements(
+  _assignments: Record<string, Record<string, ScheduleAssignment>>,
+  _operators: Operator[],
+  _tasks: TaskType[],
+  _days: WeekDay[],
+  _requirements: any[]
+): PlanBuilderViolation[] {
+  // Stub - no violations in simplified version
+  return [];
+}
+
+/**
+ * Fill empty gaps in schedule
+ */
+export function fillGapsSchedule(
+  _operators: Operator[],
+  _tasks: TaskType[],
+  _days: WeekDay[],
+  _currentAssignments: Record<string, Record<string, ScheduleAssignment>>,
+  _rules: SchedulingRules,
+  _settings: FillGapsSettings
+): FillGapsResult {
+  // Stub - return empty result
+  return {
+    assignments: [],
+    unfillableGaps: [],
+    stats: {
+      totalEmptyCells: 0,
+      filledCells: 0,
+      unfilledCells: 0,
+      followedAllRules: 0,
+      requiredRelaxing: 0,
+      byDay: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0 }
+    }
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V2 SCHEDULING ALGORITHM
+// Enhanced algorithm with:
+// 1. Decay scoring - soft penalties instead of hard blocks for rotation
+// 2. Explicit Flex priority - clear scoring for Flex on Exceptions
+// 3. Early filtering - availability/skills filtered BEFORE scoring
+// 4. Coordinator isolation - TCs handled completely separately
+// 5. TaskRequirements integration - respects Task Staffing settings
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * V2 Smart Schedule Generation
+ * Key differences from V1:
+ * - Coordinators are FULLY isolated (handled first, never in main pool)
+ * - Decay scoring replaces hard rotation blocks
+ * - Availability/skills filtered BEFORE scoring (not penalized)
+ * - Explicit Flex priority scoring for Exceptions
+ * - Respects TaskRequirements from Task Staffing settings (0 = skip task)
+ */
+export function generateSmartScheduleV2(data: ScheduleRequestData): ScheduleResult {
+  const {
+    operators,
+    tasks,
+    days,
+    currentAssignments = {},
+    rules = DEFAULT_RULES,
+    taskRequirements = [],
+  } = data;
+
+  const assignments: ScheduleResult['assignments'] = [];
+  const warnings: ScheduleWarning[] = [];
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 1: Separate Coordinators from Regular operators
+  // Coordinators are FULLY isolated - never enter the main assignment pool
+  // ─────────────────────────────────────────────────────────────────────────
+  const coordinators = operators.filter(op => op.type === 'Coordinator');
+  const regularOperators = operators.filter(op => op.type !== 'Coordinator');
+
+  // Track assignments across all days
+  const operatorTaskHistory: Record<string, string[]> = {}; // operatorId -> [taskId per day]
+  const operatorTaskCount: Record<string, number> = {};
+  const operatorHeavyTaskCount: Record<string, number> = {};
+  // Skill Variety: track how many times each skill has been used per operator
+  const operatorSkillsUsed: Record<string, Record<string, number>> = {}; // operatorId -> skillName -> count
+
+  // Initialize tracking for regular operators only
+  regularOperators.forEach(op => {
+    operatorTaskHistory[op.id] = [];
+    operatorTaskCount[op.id] = 0;
+    operatorHeavyTaskCount[op.id] = 0;
+    operatorSkillsUsed[op.id] = {}; // Start with empty skill usage
+  });
+
+  // Track TC assignments by day (for task count tracking)
+  const tcAssignedByDay: Record<string, Set<string>> = {};
+  const tcTaskByDay: Record<string, Record<string, string>> = {}; // day -> tcId -> taskId
+  days.forEach(day => {
+    tcAssignedByDay[day] = new Set();
+    tcTaskByDay[day] = {};
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 2: Schedule Coordinators (completely separate from main pool)
+  // Uses existing scheduleTCsAsGroup function
+  // ─────────────────────────────────────────────────────────────────────────
+  if (rules.autoAssignCoordinators && coordinators.length > 0) {
+    const tcTasks = tasks.filter(t => TC_TASK_IDS.includes(t.id));
+    if (tcTasks.length > 0) {
+      const tcAssignments = scheduleTCsAsGroup(coordinators, tcTasks, days, currentAssignments);
+
+      tcAssignments.forEach(assignment => {
+        assignments.push(assignment);
+        tcAssignedByDay[assignment.day].add(assignment.operatorId);
+        tcTaskByDay[assignment.day][assignment.operatorId] = assignment.taskId;
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 3: Helper to get required operators for a task on a day
+  // Prioritizes TaskRequirements settings over task's built-in requiredOperators
+  // ─────────────────────────────────────────────────────────────────────────
+  const getRequiredForTask = (task: TaskType, day: WeekDay): number => {
+    // First check TaskRequirements from settings
+    const taskReq = taskRequirements.find(r => r.taskId === task.id && r.enabled !== false);
+    if (taskReq) {
+      const requirements = getRequirementsForDay(taskReq, day);
+      return getTotalFromRequirements(requirements);
+    }
+    // Fall back to task's built-in property
+    return getRequiredOperatorsForDay(task, day);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 4: Process each day
+  // ─────────────────────────────────────────────────────────────────────────
+  days.forEach((day, dayIndex) => {
+    const dayAssignments = currentAssignments[dayIndex] || {};
+    const assignedOperatorsToday = new Set<string>();
+    const taskAssignmentCount: Record<string, number> = {};
+
+    // Include TCs already assigned
+    tcAssignedByDay[day].forEach(tcId => {
+      assignedOperatorsToday.add(tcId);
+      const tcTaskId = tcTaskByDay[day][tcId];
+      if (tcTaskId) {
+        taskAssignmentCount[tcTaskId] = (taskAssignmentCount[tcTaskId] || 0) + 1;
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 1: Respect ALL locked/pinned assignments first
+    // ─────────────────────────────────────────────────────────────────────────
+    Object.entries(dayAssignments).forEach(([opId, assignment]) => {
+      if ((assignment.locked || assignment.pinned) && assignment.taskId) {
+        if (assignedOperatorsToday.has(opId)) return;
+
+        assignments.push({
+          day,
+          operatorId: opId,
+          taskId: assignment.taskId,
+        });
+        assignedOperatorsToday.add(opId);
+
+        // Track for regular operators
+        if (operatorTaskCount[opId] !== undefined) {
+          operatorTaskCount[opId]++;
+          const task = tasks.find(t => t.id === assignment.taskId);
+          if (task && HEAVY_TASKS.includes(task.name)) {
+            operatorHeavyTaskCount[opId]++;
+          }
+        }
+
+        taskAssignmentCount[assignment.taskId] = (taskAssignmentCount[assignment.taskId] || 0) + 1;
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 2: EARLY FILTERING - Get truly available operators
+    // Filter BEFORE scoring, not during (V2 key improvement)
+    // ─────────────────────────────────────────────────────────────────────────
+    const availableOperators = regularOperators.filter(op => {
+      // Already assigned today
+      if (assignedOperatorsToday.has(op.id)) return false;
+
+      // Not available on this day
+      if (!op.availability[day]) return false;
+
+      // Not active
+      if (op.status !== 'Active') return false;
+
+      return true;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 3: Get tasks that need more operators
+    // Uses TaskRequirements from settings (0 = skip task entirely)
+    // ─────────────────────────────────────────────────────────────────────────
+    const tasksToAssign = tasks.filter(task => {
+      // Skip TC-only tasks (already handled)
+      if (TC_TASK_IDS.includes(task.id)) return false;
+
+      // Get required count from TaskRequirements or task's built-in property
+      const required = getRequiredForTask(task, day);
+
+      // If required is 0, skip this task entirely
+      if (required === 0) return false;
+
+      const assigned = taskAssignmentCount[task.id] || 0;
+      return assigned < required;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 4: Score each operator-task combination using V2 scoring
+    // ─────────────────────────────────────────────────────────────────────────
+    const scores: OperatorScore[] = [];
+
+    // Track operator types for type requirements
+    const taskTypeAssignments: Record<string, Record<string, number>> = {};
+    tasks.forEach(t => {
+      taskTypeAssignments[t.id] = { Regular: 0, Flex: 0, Coordinator: 0 };
+    });
+
+    // Count types already assigned via locked/pinned
+    Object.entries(dayAssignments).forEach(([opId, assignment]) => {
+      if ((assignment.locked || assignment.pinned) && assignment.taskId) {
+        const op = operators.find(o => o.id === opId);
+        if (op) {
+          taskTypeAssignments[assignment.taskId][op.type] =
+            (taskTypeAssignments[assignment.taskId][op.type] || 0) + 1;
+        }
+      }
+    });
+
+    // Helper to get requirement for a task
+    const getTaskRequirement = (taskId: string): TaskRequirement | undefined => {
+      return taskRequirements.find(r => r.taskId === taskId && r.enabled !== false);
+    };
+
+    availableOperators.forEach(op => {
+      tasksToAssign.forEach(task => {
+        const score = calculateAssignmentScoreV2(
+          op,
+          task,
+          day,
+          dayIndex,
+          {
+            operatorTaskHistory,
+            operatorTaskCount,
+            operatorHeavyTaskCount,
+            taskTypeAssignments,
+            operatorSkillsUsed,
+          },
+          rules,
+          tasks,
+          getTaskRequirement(task.id)
+        );
+
+        // V2: Only include if score > 0 (hard constraints passed)
+        if (score.score > 0) {
+          scores.push(score);
+        }
+      });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 5: Sort by score and assign
+    // ─────────────────────────────────────────────────────────────────────────
+    const randomFactor = rules.randomizationFactor || 0;
+    scores.sort((a, b) => {
+      const aScore = a.score + (randomFactor > 0 ? Math.random() * randomFactor : 0);
+      const bScore = b.score + (randomFactor > 0 ? Math.random() * randomFactor : 0);
+      return bScore - aScore;
+    });
+
+    const taskAssignmentsThisRound: Record<string, number> = { ...taskAssignmentCount };
+
+    scores.forEach(score => {
+      if (assignedOperatorsToday.has(score.operatorId)) return;
+
+      const task = tasks.find(t => t.id === score.taskId);
+      if (!task) return;
+
+      const required = getRequiredForTask(task, day);
+      const currentlyAssigned = taskAssignmentsThisRound[score.taskId] || 0;
+      if (currentlyAssigned >= required) return;
+
+      assignments.push({
+        day,
+        operatorId: score.operatorId,
+        taskId: score.taskId,
+      });
+
+      assignedOperatorsToday.add(score.operatorId);
+      taskAssignmentsThisRound[score.taskId] = currentlyAssigned + 1;
+      operatorTaskCount[score.operatorId]++;
+
+      // Update type tracking
+      const assignedOp = operators.find(o => o.id === score.operatorId);
+      if (assignedOp) {
+        taskTypeAssignments[score.taskId][assignedOp.type]++;
+      }
+
+      if (HEAVY_TASKS.includes(task.name)) {
+        operatorHeavyTaskCount[score.operatorId]++;
+      }
+
+      // Update history
+      operatorTaskHistory[score.operatorId].push(score.taskId);
+
+      // Update skill usage tracking (for Skill Variety feature)
+      const skill = task.requiredSkill;
+      if (skill && operatorSkillsUsed[score.operatorId]) {
+        operatorSkillsUsed[score.operatorId][skill] =
+          (operatorSkillsUsed[score.operatorId][skill] || 0) + 1;
+      }
+    });
+
+    // Update history for operators who weren't assigned (maintain alignment)
+    availableOperators.forEach(op => {
+      if (!assignedOperatorsToday.has(op.id)) {
+        operatorTaskHistory[op.id].push(''); // Empty for this day
+      }
+    });
+  });
+
+  return { assignments, warnings };
+}
+
+/**
+ * V2 Scoring Function
+ * Key differences from V1:
+ * - DECAY SCORING for rotation (soft penalty, not hard block)
+ * - EXPLICIT Flex priority for Exceptions (+5 Flex, -3 non-Flex)
+ * - No availability checks (filtered BEFORE reaching this function)
+ * - Stronger type requirement enforcement
+ */
+function calculateAssignmentScoreV2(
+  operator: Operator,
+  task: TaskType,
+  day: WeekDay,
+  dayIndex: number,
+  tracking: {
+    operatorTaskHistory: Record<string, string[]>;
+    operatorTaskCount: Record<string, number>;
+    operatorHeavyTaskCount: Record<string, number>;
+    taskTypeAssignments: Record<string, Record<string, number>>;
+    operatorSkillsUsed: Record<string, Record<string, number>>; // operatorId -> skill -> count
+  },
+  rules: SchedulingRules,
+  allTasks: TaskType[],
+  taskRequirement?: TaskRequirement
+): OperatorScore {
+  let score = 100;
+  const reasons: string[] = [];
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HARD CONSTRAINT: Skill matching (instant disqualification)
+  // ─────────────────────────────────────────────────────────────────────────
+  const hasSkill = operator.skills.includes(task.requiredSkill);
+  if (!hasSkill) {
+    if (rules.strictSkillMatching) {
+      return { operatorId: operator.id, taskId: task.id, score: 0, reasons: ['No required skill'] };
+    } else {
+      score -= 50;
+      reasons.push('Missing skill (soft)');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HARD CONSTRAINT: Coordinators should never reach this function
+  // But just in case, block them from non-coordinator tasks
+  // ─────────────────────────────────────────────────────────────────────────
+  if (operator.type === 'Coordinator') {
+    return { operatorId: operator.id, taskId: task.id, score: 0, reasons: ['Coordinator excluded from main pool'] };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FLEX SINGLE-SKILL EXEMPTION
+  // Flex operators with only 1 skill are exempt from rotation rules
+  // They have no other task options, so they must do the same task all week
+  // ─────────────────────────────────────────────────────────────────────────
+  const isFlexWithSingleSkill = operator.type === 'Flex' && operator.skills.length === 1;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DECAY SCORING: Same task penalty (V2 key feature)
+  // Instead of hard blocks, use graduated penalties
+  // Skip for Flex with single skill - they have no other options
+  // ─────────────────────────────────────────────────────────────────────────
+  const history = tracking.operatorTaskHistory[operator.id] || [];
+  let consecutiveDays = 0;
+
+  // Count consecutive days on same task (from most recent)
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i] === task.id) {
+      consecutiveDays++;
+    } else {
+      break;
+    }
+  }
+
+  // Only apply decay scoring if NOT a Flex with single skill
+  if (consecutiveDays > 0 && !isFlexWithSingleSkill) {
+    if (consecutiveDays >= rules.maxConsecutiveDaysOnSameTask) {
+      // HARD BLOCK at max consecutive days
+      return {
+        operatorId: operator.id,
+        taskId: task.id,
+        score: 0,
+        reasons: [`Already ${consecutiveDays} consecutive days on ${task.name}`],
+      };
+    } else {
+      // DECAY PENALTY: -6 points per consecutive day
+      const decayPenalty = consecutiveDays * 6;
+      score -= decayPenalty;
+      reasons.push(`Decay penalty: ${consecutiveDays} day(s) on same task (-${decayPenalty})`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EXPLICIT FLEX PRIORITY FOR EXCEPTIONS (V2 key feature)
+  // +5 for Flex on Exceptions, -3 for non-Flex
+  // ─────────────────────────────────────────────────────────────────────────
+  if (rules.prioritizeFlexForExceptions && task.name === 'Exceptions') {
+    if (operator.type === 'Flex') {
+      score += 5;
+      reasons.push('Flex priority for Exceptions (+5)');
+    } else {
+      score -= 3;
+      reasons.push('Non-Flex on Exceptions (-3)');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSECUTIVE HEAVY TASK PENALTY
+  // Skip for Flex with single skill - they have no other options
+  // ─────────────────────────────────────────────────────────────────────────
+  const isHeavyTask = HEAVY_TASKS.includes(task.name);
+  if (isHeavyTask && !rules.allowConsecutiveHeavyShifts && !isFlexWithSingleSkill) {
+    const lastTaskId = history[history.length - 1];
+    if (lastTaskId) {
+      const lastTaskObj = allTasks.find(t => t.id === lastTaskId);
+      if (lastTaskObj && HEAVY_TASKS.includes(lastTaskObj.name)) {
+        score -= 25;
+        reasons.push('Consecutive heavy shift (-25)');
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FAIR DISTRIBUTION: Heavy task balance
+  // ─────────────────────────────────────────────────────────────────────────
+  if (rules.fairDistribution && isHeavyTask) {
+    const counts = Object.values(tracking.operatorHeavyTaskCount);
+    const avgHeavyTasks = counts.length > 0 ? counts.reduce((a, b) => a + b, 0) / counts.length : 0;
+    const operatorHeavyCount = tracking.operatorHeavyTaskCount[operator.id] || 0;
+
+    if (operatorHeavyCount > avgHeavyTasks + 1) {
+      score -= 12;
+      reasons.push('Above average heavy tasks (-12)');
+    } else if (operatorHeavyCount < avgHeavyTasks) {
+      score += 8;
+      reasons.push('Below average heavy tasks (+8)');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // WORKLOAD BALANCE: Total task balance
+  // ─────────────────────────────────────────────────────────────────────────
+  if (rules.balanceWorkload) {
+    const counts = Object.values(tracking.operatorTaskCount);
+    const avgTasks = counts.length > 0 ? counts.reduce((a, b) => a + b, 0) / counts.length : 0;
+    const operatorCount = tracking.operatorTaskCount[operator.id] || 0;
+
+    if (operatorCount > avgTasks + 1) {
+      score -= 8;
+      reasons.push('Above average workload (-8)');
+    } else if (operatorCount < avgTasks) {
+      score += 4;
+      reasons.push('Below average workload (+4)');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SKILL VARIETY: Prioritize using all of operator's skills
+  // Gives bonus for tasks using skills the operator hasn't used yet this week
+  // ─────────────────────────────────────────────────────────────────────────
+  if (rules.prioritizeSkillVariety) {
+    const skill = task.requiredSkill;
+    const skillsUsed = tracking.operatorSkillsUsed[operator.id] || {};
+    const usageCount = skillsUsed[skill] || 0;
+
+    // Calculate how many of the operator's skills have been used
+    const totalSkills = operator.skills.length;
+    const usedSkillCount = Object.keys(skillsUsed).length;
+
+    if (usageCount === 0) {
+      // Unused skill - highest bonus
+      score += 15;
+      reasons.push(`Unused skill: ${skill} (+15)`);
+    } else if (usageCount === 1) {
+      // Used once - smaller bonus
+      score += 5;
+      reasons.push(`Skill used once: ${skill} (+5)`);
+    }
+    // usageCount >= 2: no bonus (neutral)
+
+    // Extra bonus if operator has many unused skills left
+    const unusedSkillsRemaining = totalSkills - usedSkillCount;
+    if (unusedSkillsRemaining >= 3 && usageCount === 0) {
+      score += 5;
+      reasons.push(`Many unused skills (${unusedSkillsRemaining}) (+5)`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TYPE REQUIREMENT SCORING
+  // ─────────────────────────────────────────────────────────────────────────
+  if (taskRequirement) {
+    const requirements = getRequirementsForDay(taskRequirement, day);
+    const currentAssignments = tracking.taskTypeAssignments[task.id] || { Regular: 0, Flex: 0, Coordinator: 0 };
+
+    let matchesNeededType = false;
+    let allSlotsFilledForType = false;
+
+    for (const req of requirements) {
+      if (req.count === 0) continue;
+
+      if (req.type === operator.type) {
+        const currentCount = currentAssignments[req.type] || 0;
+        if (currentCount < req.count) {
+          matchesNeededType = true;
+          score += 20;
+          reasons.push(`Matches required type: ${req.type} (+20)`);
+        } else {
+          allSlotsFilledForType = true;
+        }
+      }
+    }
+
+    if (allSlotsFilledForType && !matchesNeededType) {
+      const totalRequired = getTotalFromRequirements(requirements);
+      const totalAssigned = Object.values(currentAssignments).reduce((sum, count) => sum + count, 0);
+      if (totalAssigned >= totalRequired) {
+        score -= 40;
+        reasons.push(`${operator.type} slots already filled (-40)`);
+      }
+    }
+  }
+
+  return { operatorId: operator.id, taskId: task.id, score, reasons };
 }
