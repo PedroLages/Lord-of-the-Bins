@@ -1,6 +1,7 @@
 import { MOCK_OPERATORS, MOCK_TASKS } from '../../types';
 import { DEFAULT_RULES } from '../schedulingService';
-import { storage } from './indexedDBStorage';
+import { storage } from './index';
+import { SupabaseStorageService } from './supabaseStorage';
 import { db } from './database';
 import type { AppSettings } from './database';
 import type { Operator, TaskType, WeeklySchedule } from '../../types';
@@ -40,11 +41,14 @@ export async function initializeStorage(): Promise<InitResult> {
   // Initialize database
   const isFirstTime = await storage.initialize();
 
-  if (isFirstTime) {
+  // Only seed data for IndexedDB (Supabase starts empty - user adds data manually)
+  const isSupabase = storage instanceof SupabaseStorageService;
+
+  if (isFirstTime && !isSupabase) {
     console.log('First time setup - seeding default data...');
     await seedDefaultData();
-  } else {
-    // Run migrations for existing installations
+  } else if (!isFirstTime && !isSupabase) {
+    // Run migrations for existing installations (IndexedDB only)
     await runMigrations();
   }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { getInitials, getRoleDisplayText, type DemoUser } from '../types';
+import { getInitials } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
   activeTab: string;
@@ -9,8 +10,6 @@ interface SidebarProps {
   toggleSidebar: () => void;
   theme: string;
   onOpenFeedback?: () => void;
-  user?: DemoUser | null;
-  onSignOut?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -22,11 +21,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   toggleSidebar,
   theme,
   onOpenFeedback,
-  user,
-  onSignOut,
   isCollapsed = false,
   onToggleCollapse
 }) => {
+  const { user, signOut } = useAuth();
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'schedule', label: 'Schedule', icon: Calendar },
@@ -169,36 +167,28 @@ const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer / Context */}
         <div className={`${isCollapsed ? 'p-2' : 'p-4'} ${styles.footer}`}>
           {/* User Profile Card */}
-          {user && !isCollapsed && (
+          {user?.profile && !isCollapsed && (
             <div className={`rounded-lg p-3 border mb-3 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-slate-800/50 border-slate-700/50'}`}>
               <div className="flex items-center gap-3">
                 {/* Avatar */}
-                {user.profilePicture ? (
-                  <img
-                    src={user.profilePicture}
-                    alt={user.displayName}
-                    className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
-                  />
-                ) : (
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'team-leader'
-                      ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
-                      : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
-                  }`}>
-                    {getInitials(user.displayName)}
-                  </div>
-                )}
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                  user.profile.role === 'Team Leader'
+                    ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
+                    : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
+                }`}>
+                  {getInitials(user.profile.display_name)}
+                </div>
                 {/* Name & Role */}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{user.displayName}</p>
+                  <p className="text-sm font-semibold text-white truncate">{user.profile.display_name}</p>
                   <div className="flex items-center gap-1">
-                    {user.role === 'team-leader' ? (
+                    {user.profile.role === 'Team Leader' ? (
                       <Crown className="w-3 h-3 text-amber-400" />
                     ) : (
                       <Shield className="w-3 h-3 text-emerald-400" />
                     )}
-                    <span className={`text-xs ${user.role === 'team-leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {getRoleDisplayText(user.role)}
+                    <span className={`text-xs ${user.profile.role === 'Team Leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {user.profile.role}
                     </span>
                   </div>
                 </div>
@@ -207,27 +197,18 @@ const Sidebar: React.FC<SidebarProps> = ({
           )}
 
           {/* Collapsed user avatar */}
-          {user && isCollapsed && (
+          {user?.profile && isCollapsed && (
             <div className="flex justify-center mb-3">
-              {user.profilePicture ? (
-                <img
-                  src={user.profilePicture}
-                  alt={user.displayName}
-                  className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
-                  title={user.displayName}
-                />
-              ) : (
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'team-leader'
-                      ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
-                      : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
-                  }`}
-                  title={user.displayName}
-                >
-                  {getInitials(user.displayName)}
-                </div>
-              )}
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                  user.profile.role === 'Team Leader'
+                    ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
+                    : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
+                }`}
+                title={user.profile.display_name}
+              >
+                {getInitials(user.profile.display_name)}
+              </div>
             </div>
           )}
 
@@ -262,9 +243,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           )}
 
           {/* Sign Out Button */}
-          {onSignOut && !isCollapsed && (
+          {user && !isCollapsed && (
             <button
-              onClick={onSignOut}
+              onClick={signOut}
               className="flex items-center gap-3 px-4 py-3 mt-2 text-sm font-medium w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800"
             >
               <LogOut className="h-4 w-4" />
@@ -273,9 +254,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           )}
 
           {/* Collapsed sign out icon */}
-          {onSignOut && isCollapsed && (
+          {user && isCollapsed && (
             <button
-              onClick={onSignOut}
+              onClick={signOut}
               title="Sign Out"
               className="flex items-center justify-center p-3 w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800"
             >

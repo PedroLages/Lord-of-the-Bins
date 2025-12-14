@@ -325,21 +325,23 @@ export class SupabaseStorageService implements StorageService {
 
     if (!data) {
       return {
+        id: 'app_settings',
         theme: 'Modern',
-        rules: DEFAULT_RULES,
+        schedulingRules: DEFAULT_RULES,
       };
     }
 
     return {
+      id: 'app_settings',
       theme: 'Modern', // Theme is stored per-user in the future
-      rules: this.mapSchedulingRulesFromDB(data),
+      schedulingRules: this.mapSchedulingRulesFromDB(data),
     };
   }
 
   async saveSettings(settings: AppSettings): Promise<void> {
     if (!this.shiftId) throw new Error('No shift ID available');
 
-    const dbRules = this.mapSchedulingRulesToDB(settings.rules);
+    const dbRules = this.mapSchedulingRulesToDB(settings.schedulingRules);
 
     // Check if rules exist for this shift
     const { data: existing } = await supabase
@@ -468,48 +470,161 @@ export class SupabaseStorageService implements StorageService {
   }
 
   // ═════════════════════════════════════════════════════════════════════
-  // WEEKLY EXCLUSIONS (Not in Supabase schema yet - using local storage for now)
+  // WEEKLY EXCLUSIONS
   // ═════════════════════════════════════════════════════════════════════
 
   async getWeeklyExclusions(year: number, weekNumber: number): Promise<WeeklyExclusions | undefined> {
-    // TODO: Implement when we add weekly_exclusions table
-    return undefined;
+    const { data, error } = await supabase
+      .from('weekly_exclusions')
+      .select('*')
+      .eq('year', year)
+      .eq('week_number', weekNumber)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new Error(`Failed to fetch weekly exclusions: ${error.message}`);
+    }
+
+    return data ? this.mapWeeklyExclusionsFromDB(data) : undefined;
   }
 
   async getWeeklyExclusionsById(id: string): Promise<WeeklyExclusions | undefined> {
-    return undefined;
+    const { data, error } = await supabase
+      .from('weekly_exclusions')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw new Error(`Failed to fetch weekly exclusions: ${error.message}`);
+    return data ? this.mapWeeklyExclusionsFromDB(data) : undefined;
   }
 
   async getAllWeeklyExclusions(): Promise<WeeklyExclusions[]> {
-    return [];
+    const { data, error } = await supabase
+      .from('weekly_exclusions')
+      .select('*')
+      .order('year', { ascending: false })
+      .order('week_number', { ascending: false });
+
+    if (error) throw new Error(`Failed to fetch weekly exclusions: ${error.message}`);
+    return data.map(this.mapWeeklyExclusionsFromDB);
   }
 
   async saveWeeklyExclusions(exclusions: WeeklyExclusions): Promise<void> {
-    // TODO: Implement
+    if (!this.shiftId) throw new Error('No shift ID available');
+
+    const dbExclusions = this.mapWeeklyExclusionsToDB(exclusions);
+
+    const { data: existing } = await supabase
+      .from('weekly_exclusions')
+      .select('id')
+      .eq('id', exclusions.id)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from('weekly_exclusions')
+        .update(dbExclusions)
+        .eq('id', exclusions.id);
+
+      if (error) throw new Error(`Failed to update weekly exclusions: ${error.message}`);
+    } else {
+      const { error } = await supabase
+        .from('weekly_exclusions')
+        .insert({
+          ...dbExclusions,
+          id: exclusions.id,
+          shift_id: this.shiftId,
+        });
+
+      if (error) throw new Error(`Failed to create weekly exclusions: ${error.message}`);
+    }
+
+    await this.logActivity('weekly_exclusions_updated', 'weekly_exclusions', exclusions.id, {
+      week: `${exclusions.year}-W${exclusions.weekNumber}`,
+    });
   }
 
   async deleteWeeklyExclusions(id: string): Promise<void> {
-    // TODO: Implement
+    const { error } = await supabase
+      .from('weekly_exclusions')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new Error(`Failed to delete weekly exclusions: ${error.message}`);
+
+    await this.logActivity('weekly_exclusions_deleted', 'weekly_exclusions', id);
   }
 
   // ═════════════════════════════════════════════════════════════════════
-  // PLANNING TEMPLATES (Not in Supabase schema yet)
+  // PLANNING TEMPLATES
   // ═════════════════════════════════════════════════════════════════════
 
   async getAllPlanningTemplates(): Promise<PlanningTemplate[]> {
-    return [];
+    const { data, error } = await supabase
+      .from('planning_templates')
+      .select('*')
+      .order('name');
+
+    if (error) throw new Error(`Failed to fetch planning templates: ${error.message}`);
+    return data.map(this.mapPlanningTemplateFromDB);
   }
 
   async getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined> {
-    return undefined;
+    const { data, error} = await supabase
+      .from('planning_templates')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw new Error(`Failed to fetch planning template: ${error.message}`);
+    return data ? this.mapPlanningTemplateFromDB(data) : undefined;
   }
 
   async savePlanningTemplate(template: PlanningTemplate): Promise<void> {
-    // TODO: Implement
+    if (!this.shiftId) throw new Error('No shift ID available');
+
+    const dbTemplate = this.mapPlanningTemplateToDB(template);
+
+    const { data: existing } = await supabase
+      .from('planning_templates')
+      .select('id')
+      .eq('id', template.id)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from('planning_templates')
+        .update(dbTemplate)
+        .eq('id', template.id);
+
+      if (error) throw new Error(`Failed to update planning template: ${error.message}`);
+    } else {
+      const { error } = await supabase
+        .from('planning_templates')
+        .insert({
+          ...dbTemplate,
+          id: template.id,
+          shift_id: this.shiftId,
+        });
+
+      if (error) throw new Error(`Failed to create planning template: ${error.message}`);
+    }
+
+    await this.logActivity('planning_template_updated', 'planning_template', template.id, {
+      name: template.name,
+    });
   }
 
   async deletePlanningTemplate(id: string): Promise<void> {
-    // TODO: Implement
+    const { error } = await supabase
+      .from('planning_templates')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new Error(`Failed to delete planning template: ${error.message}`);
+
+    await this.logActivity('planning_template_deleted', 'planning_template', id);
   }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -547,6 +662,7 @@ export class SupabaseStorageService implements StorageService {
       name: db.name,
       requiredSkill: db.required_skill,
       color: db.color,
+      textColor: (db as any).text_color || '#FFFFFF', // Default to white if not set
     };
   }
 
@@ -555,6 +671,7 @@ export class SupabaseStorageService implements StorageService {
       name: task.name,
       required_skill: task.requiredSkill,
       color: task.color,
+      text_color: task.textColor || '#FFFFFF',
       is_heavy: ['Troubleshooter', 'Quality checker', 'Exceptions', 'Platform'].includes(task.name),
     };
   }
@@ -650,6 +767,48 @@ export class SupabaseStorageService implements StorageService {
     };
   }
 
+  private mapWeeklyExclusionsFromDB(db: any): WeeklyExclusions {
+    return {
+      id: db.id,
+      weekNumber: db.week_number,
+      year: db.year,
+      exclusions: db.exclusions,
+      createdAt: db.created_at,
+      updatedAt: db.updated_at,
+    };
+  }
+
+  private mapWeeklyExclusionsToDB(exclusions: WeeklyExclusions): any {
+    return {
+      week_number: exclusions.weekNumber,
+      year: exclusions.year,
+      exclusions: exclusions.exclusions,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  private mapPlanningTemplateFromDB(db: any): PlanningTemplate {
+    return {
+      id: db.id,
+      name: db.name,
+      description: db.description || undefined,
+      exclusions: db.exclusions,
+      rules: db.rules || undefined,
+      createdAt: db.created_at,
+      updatedAt: db.updated_at,
+    };
+  }
+
+  private mapPlanningTemplateToDB(template: PlanningTemplate): any {
+    return {
+      name: template.name,
+      description: template.description || null,
+      exclusions: template.exclusions,
+      rules: template.rules || null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
   // ═════════════════════════════════════════════════════════════════════
   // HELPER FUNCTIONS - UTILITIES
   // ═════════════════════════════════════════════════════════════════════
@@ -696,3 +855,6 @@ export class SupabaseStorageService implements StorageService {
     return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   }
 }
+
+// Singleton instance
+export const storage = new SupabaseStorageService();

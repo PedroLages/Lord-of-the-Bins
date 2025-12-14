@@ -3608,10 +3608,9 @@ function App() {
              Schedule Config
            </div>
            {[
-             { id: 'skills', label: 'Skills Library', icon: Award },           // 1. Foundation: define competencies
-             { id: 'task-management', label: 'Tasks', icon: Layers },          // 2. Tasks use skills
-             { id: 'requirements', label: 'Staffing Requirements', icon: Users }, // 3. Per-task staffing needs
-             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },   // 4. Behavioral configuration
+             { id: 'task-management', label: 'Skills', icon: Award },          // 1. Foundation: define competencies (unified Tasks→Skills)
+             { id: 'requirements', label: 'Staffing Requirements', icon: Users }, // 2. Per-task staffing needs
+             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },   // 3. Behavioral configuration
            ].map((item) => (
              <button
                key={item.id}
@@ -4151,8 +4150,8 @@ function App() {
                  {/* Header with search and filters */}
                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                       <h2 className={`text-xl font-bold ${styles.text}`}>Tasks</h2>
-                       <p className={`text-sm mt-1 ${styles.muted}`}>{tasks.length} tasks configured</p>
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Skills</h2>
+                       <p className={`text-sm mt-1 ${styles.muted}`}>{tasks.length} skills configured</p>
                     </div>
                     <button
                        onClick={openAddTaskModal}
@@ -4163,7 +4162,7 @@ function App() {
                        }`}
                     >
                        <Plus className="w-4 h-4" />
-                       Add Task
+                       Add Skill
                     </button>
                  </div>
 
@@ -4175,7 +4174,7 @@ function App() {
                        <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${styles.muted}`} />
                        <input
                           type="text"
-                          placeholder="Search tasks..."
+                          placeholder="Search skills..."
                           value={taskSearch}
                           onChange={(e) => setTaskSearch(e.target.value)}
                           className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm outline-none transition-colors ${

@@ -404,6 +404,8 @@ export interface TaskType {
   // Number of operators required per day (defaults to 1 if not specified)
   // Can be a single number for all days or per-day configuration
   requiredOperators?: number | Record<WeekDay, number>;
+  // If true, this skill is only assignable to coordinators and won't appear on the schedule grid
+  isCoordinatorOnly?: boolean;
 }
 
 export interface Operator {
