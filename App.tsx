@@ -18,7 +18,7 @@ import {
   UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Cloud
 } from 'lucide-react';
 import {
-  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
+  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
   type DemoUser, type AppearanceSettings, type ColorTheme, COLOR_PALETTES, DEFAULT_APPEARANCE_SETTINGS, getPaletteById, addRecentColor, getContrastTextColor, isColorInPalette, findClosestPaletteIndex,
   calculateDeltaEHex, MIN_DELTA_E_THRESHOLD, findAccessiblePaletteColors, sortByDeltaEFromColor,
   isTCTask, getTCFixedColor,
@@ -106,7 +106,6 @@ function App() {
     saveTask,
     saveSchedule,
     saveSettings,
-    saveSkills,
     saveAppearance,
     saveTaskRequirement,
     deleteTaskRequirement,
@@ -143,9 +142,11 @@ function App() {
   // App State - will be populated from storage
   const [operators, setOperators] = useState<Operator[]>([]);
   const [tasks, setTasks] = useState<TaskType[]>([]);
-  const [skills, setSkills] = useState<string[]>(INITIAL_SKILLS);
   const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE_SETTINGS);
   const [fillGapsSettings, setFillGapsSettings] = useState<FillGapsSettings>(DEFAULT_FILL_GAPS_SETTINGS);
+
+  // Derive skills from tasks (unified approach - tasks ARE skills)
+  const skills = [...new Set(tasks.map(t => t.requiredSkill))].sort();
 
   // Week Navigation State - Initialize with current week dynamically
   const [currentWeek, setCurrentWeek] = useState<WeeklySchedule>(() => createEmptyWeek(new Date()));
@@ -165,7 +166,6 @@ function App() {
       setTheme(initialData.theme);
       setSchedulingRules(initialData.schedulingRules);
       setTaskRequirements(initialData.taskRequirements || []);
-      setSkills(initialData.skills || INITIAL_SKILLS);
       setAppearance(initialData.appearance || DEFAULT_APPEARANCE_SETTINGS);
       setFillGapsSettings(initialData.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS);
 
@@ -738,16 +738,6 @@ function App() {
     return 'Custom';
   };
 
-  // Helper: Auto-add skill to Skills Library if it doesn't exist
-  const ensureSkillExists = (skillName: string) => {
-    if (skillName && !skills.includes(skillName)) {
-      const updatedSkills = [...skills, skillName].sort();
-      setSkills(updatedSkills);
-      saveSkills(updatedSkills);
-      console.log(`Auto-added skill "${skillName}" to Skills Library`);
-    }
-  };
-
   const openAddTaskModal = () => {
     setNewTaskName('');
     setNewTaskSkill(skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting');
@@ -762,9 +752,6 @@ function App() {
     }
     const newTaskId = `t${Date.now()}`;
     const requiredSkill = newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting';
-
-    // Auto-add skill to Skills Library if it doesn't exist
-    ensureSkillExists(requiredSkill);
 
     const newTask: TaskType = {
       id: newTaskId,
@@ -3909,224 +3896,6 @@ function App() {
               </div>
            )}
 
-           {settingsTab === 'skills' && (
-              <div className="space-y-6">
-                 {/* Header */}
-                 <div className="flex items-center justify-between">
-                    <div>
-                       <h2 className={`text-xl font-bold ${styles.text}`}>Skills Library</h2>
-                       <p className={`text-sm mt-1 ${styles.muted}`}>Manage the skills that can be assigned to operators and required by tasks.</p>
-                    </div>
-                 </div>
-
-                 {/* Add New Skill */}
-                 <div className={`flex items-center gap-3 p-4 rounded-xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
-                    <input
-                       type="text"
-                       value={newSkillName}
-                       onChange={(e) => setNewSkillName(e.target.value)}
-                       placeholder="Enter new skill name..."
-                       className={`flex-1 px-4 py-2.5 rounded-lg border outline-none focus:ring-2 ${
-                          theme === 'Midnight'
-                             ? 'bg-slate-900 border-slate-600 text-white placeholder:text-slate-500 focus:ring-indigo-500'
-                             : 'bg-white border-gray-200 text-slate-900 placeholder:text-gray-400 focus:ring-blue-500'
-                       }`}
-                       onKeyDown={(e) => {
-                          if (e.key === 'Enter' && newSkillName.trim()) {
-                             const trimmed = newSkillName.trim();
-                             if (skills.includes(trimmed)) {
-                                toast.error('Skill already exists');
-                                return;
-                             }
-                             const updated = [...skills, trimmed];
-                             setSkills(updated);
-                             saveSkills(updated);
-                             setNewSkillName('');
-                             toast.success(`Skill "${trimmed}" added`);
-                          }
-                       }}
-                    />
-                    <button
-                       onClick={() => {
-                          const trimmed = newSkillName.trim();
-                          if (!trimmed) return;
-                          if (skills.includes(trimmed)) {
-                             toast.error('Skill already exists');
-                             return;
-                          }
-                          const updated = [...skills, trimmed];
-                          setSkills(updated);
-                          saveSkills(updated);
-                          setNewSkillName('');
-                          toast.success(`Skill "${trimmed}" added`);
-                       }}
-                       disabled={!newSkillName.trim()}
-                       className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors ${
-                          theme === 'Midnight'
-                             ? 'bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-slate-700 disabled:text-slate-500'
-                             : 'bg-blue-600 hover:bg-blue-500 text-white disabled:bg-gray-200 disabled:text-gray-400'
-                       }`}
-                    >
-                       <Plus className="w-4 h-4" />
-                       Add Skill
-                    </button>
-                 </div>
-
-                 {/* Skills Categories */}
-                 <div className="space-y-6">
-                    {/* TC Skills (System) */}
-                    <div>
-                       <div className="flex items-center gap-2 mb-3">
-                          <Shield className={`w-4 h-4 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
-                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`}>
-                             Coordinator Skills (System)
-                          </h3>
-                       </div>
-                       <div className="flex flex-wrap gap-2">
-                          {TC_SKILLS.map((skill) => (
-                             <div
-                                key={skill}
-                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
-                                   theme === 'Midnight'
-                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                                      : 'bg-amber-100 text-amber-700 border border-amber-200'
-                                }`}
-                             >
-                                <Lock className="w-3 h-3" />
-                                {skill}
-                             </div>
-                          ))}
-                       </div>
-                       <p className={`text-xs mt-2 ${styles.muted}`}>
-                          These skills are reserved for Team Coordinators and cannot be modified.
-                       </p>
-                    </div>
-
-                    {/* Custom Skills */}
-                    <div>
-                       <div className="flex items-center gap-2 mb-3">
-                          <Award className={`w-4 h-4 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
-                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`}>
-                             Operator Skills ({skills.filter(s => !TC_SKILLS.includes(s)).length})
-                          </h3>
-                       </div>
-                       <div className="flex flex-wrap gap-2">
-                          {skills.filter(s => !TC_SKILLS.includes(s)).map((skill) => (
-                             <div
-                                key={skill}
-                                className={`group inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                                   theme === 'Midnight'
-                                      ? 'bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600'
-                                      : 'bg-white text-slate-700 border border-gray-200 hover:border-gray-300 shadow-sm'
-                                }`}
-                             >
-                                {editingSkill === skill ? (
-                                   <input
-                                      type="text"
-                                      value={editingSkillName}
-                                      onChange={(e) => setEditingSkillName(e.target.value)}
-                                      className={`w-32 px-2 py-0.5 rounded border outline-none text-sm ${
-                                         theme === 'Midnight'
-                                            ? 'bg-slate-900 border-slate-600 text-white'
-                                            : 'bg-gray-50 border-gray-300 text-slate-900'
-                                      }`}
-                                      autoFocus
-                                      onKeyDown={(e) => {
-                                         if (e.key === 'Enter') {
-                                            const trimmed = editingSkillName.trim();
-                                            if (!trimmed) return;
-                                            if (skills.includes(trimmed) && trimmed !== skill) {
-                                               toast.error('Skill name already exists');
-                                               return;
-                                            }
-                                            const updated = skills.map(s => s === skill ? trimmed : s);
-                                            setSkills(updated);
-                                            saveSkills(updated);
-                                            // Update tasks that use this skill
-                                            setTasks(tasks.map(t => t.requiredSkill === skill ? { ...t, requiredSkill: trimmed } : t));
-                                            // Update operators that have this skill
-                                            setOperators(operators.map(op => ({
-                                               ...op,
-                                               skills: op.skills.map(s => s === skill ? trimmed : s)
-                                            })));
-                                            setEditingSkill(null);
-                                            toast.success(`Skill renamed to "${trimmed}"`);
-                                         } else if (e.key === 'Escape') {
-                                            setEditingSkill(null);
-                                         }
-                                      }}
-                                      onBlur={() => setEditingSkill(null)}
-                                   />
-                                ) : (
-                                   <>
-                                      <span>{skill}</span>
-                                      {/* Show tasks that use this skill */}
-                                      {(() => {
-                                         const tasksUsingSkill = tasks.filter(t => t.requiredSkill === skill);
-                                         return tasksUsingSkill.length > 0 && (
-                                            <div className="flex items-center gap-1">
-                                               <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                                  theme === 'Midnight'
-                                                     ? 'bg-blue-500/20 text-blue-400'
-                                                     : 'bg-blue-100 text-blue-700'
-                                               }`}>
-                                                  {tasksUsingSkill.length} task{tasksUsingSkill.length !== 1 ? 's' : ''}
-                                               </span>
-                                            </div>
-                                         );
-                                      })()}
-                                      <div className="hidden group-hover:flex items-center gap-1 ml-1">
-                                         <button
-                                            onClick={() => {
-                                               setEditingSkill(skill);
-                                               setEditingSkillName(skill);
-                                            }}
-                                            className={`p-1 rounded transition-colors ${
-                                               theme === 'Midnight'
-                                                  ? 'hover:bg-slate-700 text-slate-500 hover:text-slate-300'
-                                                  : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
-                                            }`}
-                                            title="Edit skill"
-                                         >
-                                            <Edit2 className="w-3 h-3" />
-                                         </button>
-                                         <button
-                                            onClick={() => setSkillToDelete(skill)}
-                                            className={`p-1 rounded transition-colors ${
-                                               theme === 'Midnight'
-                                                  ? 'hover:bg-red-500/10 text-slate-500 hover:text-red-400'
-                                                  : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
-                                            }`}
-                                            title="Delete skill"
-                                         >
-                                            <Trash2 className="w-3 h-3" />
-                                         </button>
-                                      </div>
-                                   </>
-                                )}
-                             </div>
-                          ))}
-                       </div>
-                    </div>
-                 </div>
-
-                 {/* Info Box */}
-                 <div className={`flex items-start gap-3 p-4 rounded-xl ${
-                    theme === 'Midnight' ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-blue-50 border border-blue-100'
-                 }`}>
-                    <AlertCircle className={`w-5 h-5 shrink-0 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
-                    <div>
-                       <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-blue-300' : 'text-blue-800'}`}>
-                          Skill Dependencies
-                       </p>
-                       <p className={`text-sm mt-1 ${theme === 'Midnight' ? 'text-blue-400/80' : 'text-blue-600'}`}>
-                          Skills are linked to tasks and operators. When you edit a skill name, it will update everywhere. Deleting a skill will remove it from all operators and may affect task assignments.
-                       </p>
-                    </div>
-                 </div>
-              </div>
-           )}
-
            {settingsTab === 'task-management' && (() => {
               // Separate TC tasks from operator tasks
               const operatorTasks = tasks.filter(t => !TC_SKILLS.includes(t.requiredSkill));
@@ -4354,7 +4123,6 @@ function App() {
                                                      value={task.requiredSkill}
                                                      onChange={(e) => {
                                                         const newSkill = e.target.value;
-                                                        ensureSkillExists(newSkill);
                                                         setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
                                                      }}
                                                      className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
@@ -4587,7 +4355,6 @@ function App() {
                                                         value={task.requiredSkill}
                                                         onChange={(e) => {
                                                            const newSkill = e.target.value;
-                                                           ensureSkillExists(newSkill);
                                                            setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
                                                         }}
                                                         className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
@@ -4699,7 +4466,7 @@ function App() {
               );
            })()}
 
-           {/* Add Task Modal */}
+           {/* Add Skill Modal */}
            {showAddTaskModal && (
               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAddTaskModal(false)}>
                  <div
@@ -4711,7 +4478,7 @@ function App() {
                     {/* Modal Header */}
                     <div className={`px-6 py-4 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
                        <div className="flex items-center justify-between">
-                          <h3 className={`text-lg font-bold ${styles.text}`}>Add New Task</h3>
+                          <h3 className={`text-lg font-bold ${styles.text}`}>Add New Skill</h3>
                           <button
                              onClick={() => setShowAddTaskModal(false)}
                              className={`p-1.5 rounded-lg transition-colors ${
@@ -4725,14 +4492,14 @@ function App() {
 
                     {/* Modal Body */}
                     <div className="px-6 py-5 space-y-5">
-                       {/* Task Name */}
+                       {/* Skill Name */}
                        <div>
-                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Task Name</label>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Skill Name</label>
                           <input
                              type="text"
                              value={newTaskName}
                              onChange={(e) => setNewTaskName(e.target.value)}
-                             placeholder="Enter task name..."
+                             placeholder="Enter skill name..."
                              autoFocus
                              className={`w-full px-4 py-2.5 rounded-lg border text-sm outline-none transition-colors ${
                                 theme === 'Midnight'
@@ -4857,7 +4624,7 @@ function App() {
                                    : 'bg-blue-600 hover:bg-blue-500 text-white'
                           }`}
                        >
-                          Create Task
+                          Create Skill
                        </button>
                     </div>
                  </div>
@@ -6768,8 +6535,8 @@ function App() {
 
                                {/* Available Tasks - operator has the skill */}
                                {(() => {
-                                 const availableTasks = tasks.filter(t => op.skills.includes(t.requiredSkill));
-                                 const unavailableTasks = tasks.filter(t => !op.skills.includes(t.requiredSkill));
+                                 const availableTasks = tasks.filter(t => !t.isCoordinatorOnly && op.skills.includes(t.requiredSkill));
+                                 const unavailableTasks = tasks.filter(t => !t.isCoordinatorOnly && !op.skills.includes(t.requiredSkill));
 
                                  return (
                                    <>
@@ -7134,7 +6901,7 @@ function App() {
                                </button>
 
                                {/* Only show tasks matching Flex skills */}
-                               {tasks.filter(t => op.skills.includes(t.requiredSkill)).map(flexTask => (
+                               {tasks.filter(t => !t.isCoordinatorOnly && op.skills.includes(t.requiredSkill)).map(flexTask => (
                                  <button
                                    key={flexTask.id}
                                    onClick={() => handleAssignmentChange(dayIdx, op.id, flexTask.id)}
@@ -7359,8 +7126,8 @@ function App() {
                                  Unassigned
                                </button>
 
-                               {/* Only show coordinator tasks (Process, People, Off process, Process/AD) */}
-                               {tasks.filter(t => op.skills.includes(t.requiredSkill)).map(coordTask => (
+                               {/* Only show coordinator tasks (Process, People, Off process) */}
+                               {tasks.filter(t => t.isCoordinatorOnly && op.skills.includes(t.requiredSkill)).map(coordTask => (
                                  <button
                                    key={coordTask.id}
                                    onClick={() => handleAssignmentChange(dayIdx, op.id, coordTask.id)}
@@ -8903,10 +8670,6 @@ function App() {
                 </button>
                 <button
                   onClick={() => {
-                    // Remove skill from skills list
-                    const updated = skills.filter(s => s !== skillToDelete);
-                    setSkills(updated);
-                    saveSkills(updated);
                     // Remove skill from all operators
                     setOperators(operators.map(op => ({
                       ...op,

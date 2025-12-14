@@ -496,9 +496,9 @@ export const MOCK_TASKS: TaskType[] = [
   { id: 't9', name: 'Exceptions', color: '#ef4444', textColor: '#ffffff', requiredSkill: 'Exceptions', requiredOperators: 1 }, // Red
   { id: 't15', name: 'Exceptions/Station', color: '#f87171', textColor: '#ffffff', requiredSkill: 'Exceptions/Station', requiredOperators: 2 }, // Light Red - Flex operator task, needs 2
   { id: 't10', name: 'Troubleshooter AD', color: '#f97316', textColor: '#ffffff', requiredSkill: 'Troubleshooter AD', requiredOperators: 1 }, // Orange - Separate skill from regular Troubleshooter
-  { id: 't11', name: 'Process', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1 }, // TC - Fixed Light Green (RGB 223, 251, 233)
-  { id: 't12', name: 'People', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'People', requiredOperators: 1 }, // TC - Fixed Light Green (RGB 223, 251, 233)
-  { id: 't13', name: 'Off process', color: '#EBEDF0', textColor: '#000000', requiredSkill: 'Off Process', requiredOperators: 1 }, // TC - Fixed Light Gray (RGB 235, 237, 240)
+  { id: 't11', name: 'Process', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Green (RGB 223, 251, 233)
+  { id: 't12', name: 'People', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'People', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Green (RGB 223, 251, 233)
+  { id: 't13', name: 'Off process', color: '#EBEDF0', textColor: '#000000', requiredSkill: 'Off Process', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Gray (RGB 235, 237, 240)
 ];
 
 /**
