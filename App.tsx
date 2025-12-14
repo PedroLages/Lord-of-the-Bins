@@ -402,6 +402,25 @@ function App() {
     return result;
   }, [taskRequirements]);
 
+  // Helper to run schedule validation (reduces code duplication)
+  const runScheduleValidation = useCallback((schedule: WeeklySchedule) => {
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    schedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    setScheduleWarnings(warnings);
+  }, [operators, tasks, getValidationRequirements]);
+
+  // Validate schedule whenever schedule OR task requirements change
+  // This ensures warnings are shown on initial load and when requirements are modified
+  useEffect(() => {
+    if (dataInitialized && currentWeek) {
+      runScheduleValidation(currentWeek);
+    }
+  }, [dataInitialized, currentWeek, taskRequirements, runScheduleValidation]);
+
   // Validate Plan Builder requirements whenever schedule or requirements change
   useEffect(() => {
     const violations = validatePlanBuilderRequirements(currentWeek, tasks, taskRequirements, excludedTasks);
@@ -1426,9 +1445,7 @@ function App() {
     } else {
       setCurrentWeek(newWeekTemplate);
     }
-
-    // Clear warnings when navigating
-    setScheduleWarnings([]);
+    // Warnings will be re-validated automatically by the useEffect
   };
 
   const handleGoToCurrentWeek = () => {
@@ -1446,8 +1463,7 @@ function App() {
     } else {
       setCurrentWeek(todayWeek);
     }
-
-    setScheduleWarnings([]);
+    // Warnings will be re-validated automatically by the useEffect
   };
 
   // --- Publish Handlers ---
@@ -1970,10 +1986,17 @@ function App() {
 
       console.log(`[Plan Builder] Final task requirements (${planTaskRequirements.length} total):`, JSON.stringify(planTaskRequirements, null, 2));
 
-      // NOTE: We do NOT save planTaskRequirements to state!
-      // The Plan Builder creates TEMPORARY requirements for this week's schedule only.
-      // Permanent Task Staffing Requirements should only be modified in Settings > Staffing Requirements.
-      // The planTaskRequirements are used only for schedule generation below.
+      // Save Plan Builder requirements to state so validation shows correct warnings
+      // This ensures "Understaffed" and "Overstaffed" warnings match what the user configured
+      setTaskRequirements(planTaskRequirements);
+
+      // Persist each requirement to storage (fire and forget, don't block schedule generation)
+      planTaskRequirements.forEach(req => {
+        saveTaskRequirement(req).catch(err => {
+          console.error(`[Plan Builder] Failed to save requirement for ${req.taskId}:`, err);
+        });
+      });
+      console.log(`[Plan Builder] Saved ${planTaskRequirements.length} requirements to state and storage`);
 
       // Run smart fill with the plan's requirements
       const scheduleResult = generateOptimizedSchedule({
@@ -5725,6 +5748,13 @@ function App() {
                               desc: 'Generates multiple options to explore trade-offs',
                               badge: 'Advanced',
                               badgeColor: theme === 'Midnight' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-600'
+                           },
+                           {
+                              value: 'max-matching' as const,
+                              label: 'Max Matching (V4)',
+                              desc: 'GUARANTEES 100% fulfillment when mathematically possible',
+                              badge: '100% Fill',
+                              badgeColor: theme === 'Midnight' ? 'bg-green-500/20 text-green-400' : 'bg-green-100 text-green-600'
                            }
                         ].map((algo) => (
                            <div
@@ -5779,6 +5809,17 @@ function App() {
                         }`}>
                            <p className="text-xs font-medium">
                               💡 Multi-Objective mode will present 3-5 different schedule options, each optimizing different priorities (fairness, variety, skill matching). You'll be able to choose which one fits your weekly needs.
+                           </p>
+                        </div>
+                     )}
+                     {schedulingRules.algorithm === 'max-matching' && (
+                        <div className={`mt-4 p-3 rounded-lg border ${
+                           theme === 'Midnight'
+                              ? 'bg-green-500/10 border-green-500/30 text-green-300'
+                              : 'bg-green-50 border-green-200 text-green-700'
+                        }`}>
+                           <p className="text-xs font-medium">
+                              💡 Max Matching uses the Hopcroft-Karp algorithm to GUARANTEE 100% task fulfillment when mathematically possible. It prioritizes filling all positions over soft constraints like variety and balance.
                            </p>
                         </div>
                      )}

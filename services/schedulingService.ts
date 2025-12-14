@@ -1,4 +1,8 @@
 import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement, PlanBuilderViolation, FillGapsResult, FillGapsSettings } from '../types';
+import { generateMaxMatchingSchedule } from './scheduling/maxMatchingScheduler';
+
+// Algorithm type for scheduling
+export type SchedulingAlgorithm = 'greedy' | 'greedy-tabu' | 'multi-objective' | 'max-matching';
 
 // Configuration for the scheduling algorithm
 export interface SchedulingRules {
@@ -13,6 +17,7 @@ export interface SchedulingRules {
   randomizationFactor: number; // 0-20: adds variety to schedule generation
   useV2Algorithm: boolean; // Use enhanced V2 algorithm with decay scoring and early filtering
   prioritizeSkillVariety: boolean; // V2: Prioritize using all of operator's skills across the week
+  algorithm?: SchedulingAlgorithm; // Which scheduling algorithm to use
 }
 
 export const DEFAULT_RULES: SchedulingRules = {
@@ -854,11 +859,18 @@ function scheduleTCsAsGroup(
 
 /**
  * Main entry point for schedule generation
- * Routes to V1 or V2 algorithm based on rules.useV2Algorithm flag
+ * Routes to the appropriate algorithm based on rules.algorithm setting
  */
 export function generateOptimizedSchedule(data: ScheduleRequestData): ScheduleResult {
   const rules = data.rules || DEFAULT_RULES;
 
+  // Route based on algorithm selection
+  if (rules.algorithm === 'max-matching') {
+    // V4: Maximum Bipartite Matching - GUARANTEES 100% fulfillment when possible
+    return generateMaxMatchingSchedule(data);
+  }
+
+  // Legacy routing via useV2Algorithm flag (for backward compatibility)
   if (rules.useV2Algorithm) {
     return generateSmartScheduleV2(data);
   }
