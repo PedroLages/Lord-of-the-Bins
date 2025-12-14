@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Sidebar from './components/Sidebar';
-import SetupPage from './components/SetupPage';
+// import SetupPage from './components/SetupPage'; // Not needed with Supabase auth
 import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
@@ -15,7 +15,7 @@ import {
   Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
   Palmtree, Thermometer, GraduationCap, CircleDashed,
   CalendarX2, Shuffle, Scale, GripVertical, Command,
-  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick
+  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Cloud
 } from 'lucide-react';
 import {
   Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
@@ -26,14 +26,14 @@ import {
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
   type PlanningTemplate
 } from './types';
-import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
+import { useAuth } from './contexts/AuthContext';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
 import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
-import ProfileSettings from './components/ProfileSettings';
+// import ProfileSettings from './components/ProfileSettings'; // Temporarily disabled for Supabase migration
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -91,7 +91,10 @@ const THEME_STYLES = {
 };
 
 function App() {
-  // Storage hook - handles persistence
+  // Auth hook - Supabase authentication
+  const { user: authUser, isLoading: authLoading, isAuthenticated } = useAuth();
+
+  // Storage hook - handles persistence (only initialize when authenticated)
   const {
     loadingState,
     error: storageError,
@@ -115,17 +118,17 @@ function App() {
     getAllPlanningTemplates,
     savePlanningTemplate,
     deletePlanningTemplate,
-  } = useStorage();
+  } = useStorage({ enabled: isAuthenticated });
 
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  // Auth state
+  // Auth state (legacy - gradually being migrated to Supabase)
   const [authChecking, setAuthChecking] = useState(true);
-  const [needsSetup, setNeedsSetup] = useState(false);
-  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
+  // const [needsSetup, setNeedsSetup] = useState(false); // Not needed with Supabase
+  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null); // TODO: Remove once all components use authUser
 
   // Toast system
   const toast = useToasts();
@@ -294,59 +297,20 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
-  // Check auth state on mount
+  // Sync Supabase auth user with local state (for gradual migration)
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        // First check if any users exist
-        const usersExist = await hasUsers();
-        if (!usersExist) {
-          setNeedsSetup(true);
-          setAuthChecking(false);
-          return;
-        }
-
-        // Check if user is logged in
-        const user = await getCurrentUser();
-        if (user) {
-          setCurrentUser(user);
-          // Apply user's theme preference
-          if (user.preferences?.theme) {
-            setTheme(user.preferences.theme);
-          }
-        }
-      } catch (err) {
-        console.error('Auth check failed:', err);
-      } finally {
-        setAuthChecking(false);
-      }
-    };
-
-    checkAuth();
-  }, []);
-
-  // Handle sign out
-  const handleSignOut = useCallback(() => {
-    authLogout();
-    setCurrentUser(null);
-    toast.info('Signed out successfully');
-  }, [toast]);
-
-  // Handle setup complete
-  const handleSetupComplete = useCallback(async () => {
-    setNeedsSetup(false);
-    // After setup, user should now log in
-    setAuthChecking(false);
-  }, []);
-
-  // Handle login
-  const handleLogin = useCallback((user: DemoUser) => {
-    setCurrentUser(user);
-    if (user.preferences?.theme) {
-      setTheme(user.preferences.theme);
+    if (!authLoading) {
+      setAuthChecking(false);
+      // For now, we'll keep currentUser as null since we're using Supabase
+      // The Sidebar already uses authUser from context
+      // TODO: Gradually remove currentUser state once all components use authUser
     }
-    toast.success(`Welcome back, ${user.displayName}!`);
-  }, [toast]);
+  }, [authLoading, authUser]);
+
+  // Legacy auth handlers - no longer used with Supabase
+  // const handleSignOut = useCallback(() => { ... }, [toast]);
+  // const handleSetupComplete = useCallback(async () => { ... }, []);
+  // const handleLogin = useCallback((user: DemoUser) => { ... }, [toast]);
 
   // Settings State
   const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile'>('appearance');
@@ -468,6 +432,8 @@ function App() {
   const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationResults, setMigrationResults] = useState<any[] | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<TaskType | null>(null);
   const [skillToDelete, setSkillToDelete] = useState<string | null>(null);
   const [newSkillName, setNewSkillName] = useState('');
@@ -772,6 +738,16 @@ function App() {
     return 'Custom';
   };
 
+  // Helper: Auto-add skill to Skills Library if it doesn't exist
+  const ensureSkillExists = (skillName: string) => {
+    if (skillName && !skills.includes(skillName)) {
+      const updatedSkills = [...skills, skillName].sort();
+      setSkills(updatedSkills);
+      saveSkills(updatedSkills);
+      console.log(`Auto-added skill "${skillName}" to Skills Library`);
+    }
+  };
+
   const openAddTaskModal = () => {
     setNewTaskName('');
     setNewTaskSkill(skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting');
@@ -785,12 +761,17 @@ function App() {
       return;
     }
     const newTaskId = `t${Date.now()}`;
+    const requiredSkill = newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting';
+
+    // Auto-add skill to Skills Library if it doesn't exist
+    ensureSkillExists(requiredSkill);
+
     const newTask: TaskType = {
       id: newTaskId,
       name: newTaskName.trim(),
       color: newTaskColor,
       textColor: '#ffffff',
-      requiredSkill: newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting',
+      requiredSkill,
       requiredOperators: 1,
     };
     setTasks(prev => [...prev, newTask]);
@@ -3911,28 +3892,22 @@ function App() {
               </div>
            )}
 
-           {settingsTab === 'profile' && currentUser && (
-              <ProfileSettings
-                user={currentUser}
-                theme={theme}
-                styles={styles}
-                onUpdateUser={async (updates) => {
-                  const updated = await updateUser(currentUser.id, updates);
-                  if (updated) {
-                    setCurrentUser(updated);
-                    // Also update session data for sidebar
-                    updateSessionData({
-                      displayName: updated.displayName,
-                      profilePicture: updated.profilePicture,
-                    });
-                  }
-                }}
-                onChangePassword={async (current, newPass) => {
-                  await changePassword(currentUser.id, current, newPass);
-                }}
-                onProcessPicture={processProfilePicture}
-                toast={toast}
-              />
+           {settingsTab === 'profile' && authUser?.profile && (
+              <div className={`p-8 ${styles.text}`}>
+                <div className={`rounded-xl p-6 border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
+                  <h3 className="text-lg font-semibold mb-2">Profile Settings</h3>
+                  <p className={styles.muted}>User profile management coming soon with Supabase integration.</p>
+                  <div className="mt-4 space-y-2">
+                    <p><strong>Name:</strong> {authUser.profile.display_name}</p>
+                    <p><strong>Role:</strong> {authUser.profile.role}</p>
+                    <p><strong>User Code:</strong> {authUser.profile.user_code}</p>
+                    {authUser.profile.email && <p><strong>Email:</strong> {authUser.profile.email}</p>}
+                  </div>
+                  <p className={`mt-4 text-sm ${styles.muted}`}>
+                    Profile editing, password changes, and profile pictures will be available once Supabase integration is complete.
+                  </p>
+                </div>
+              </div>
            )}
 
            {settingsTab === 'skills' && (
@@ -4086,6 +4061,21 @@ function App() {
                                 ) : (
                                    <>
                                       <span>{skill}</span>
+                                      {/* Show tasks that use this skill */}
+                                      {(() => {
+                                         const tasksUsingSkill = tasks.filter(t => t.requiredSkill === skill);
+                                         return tasksUsingSkill.length > 0 && (
+                                            <div className="flex items-center gap-1">
+                                               <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                                  theme === 'Midnight'
+                                                     ? 'bg-blue-500/20 text-blue-400'
+                                                     : 'bg-blue-100 text-blue-700'
+                                               }`}>
+                                                  {tasksUsingSkill.length} task{tasksUsingSkill.length !== 1 ? 's' : ''}
+                                               </span>
+                                            </div>
+                                         );
+                                      })()}
                                       <div className="hidden group-hover:flex items-center gap-1 ml-1">
                                          <button
                                             onClick={() => {
@@ -4363,7 +4353,11 @@ function App() {
                                                   </label>
                                                   <select
                                                      value={task.requiredSkill}
-                                                     onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
+                                                     onChange={(e) => {
+                                                        const newSkill = e.target.value;
+                                                        ensureSkillExists(newSkill);
+                                                        setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
+                                                     }}
                                                      className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
                                                         theme === 'Midnight'
                                                            ? 'bg-slate-900 border-slate-600 text-slate-300'
@@ -4592,7 +4586,11 @@ function App() {
                                                      </label>
                                                      <select
                                                         value={task.requiredSkill}
-                                                        onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
+                                                        onChange={(e) => {
+                                                           const newSkill = e.target.value;
+                                                           ensureSkillExists(newSkill);
+                                                           setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
+                                                        }}
                                                         className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
                                                            theme === 'Midnight'
                                                               ? 'bg-slate-900 border-slate-600 text-slate-300'
@@ -6000,6 +5998,106 @@ function App() {
                            />
                         </label>
                      </div>
+                  </div>
+
+                  {/* Supabase Migration */}
+                  <div className={`p-6 rounded-2xl border ${theme === 'Midnight' ? 'bg-indigo-950/20 border-indigo-900/50' : 'bg-indigo-50 border-indigo-200'}`}>
+                     <div className="flex items-center gap-3 mb-4">
+                        <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-indigo-100 text-indigo-600'}`}>
+                           <Cloud className="h-5 w-5" />
+                        </div>
+                        <div>
+                           <h3 className={`font-bold ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-700'}`}>Migrate to Supabase</h3>
+                           <p className={`text-xs ${theme === 'Midnight' ? 'text-indigo-400/70' : 'text-indigo-600/70'}`}>One-time cloud migration</p>
+                        </div>
+                     </div>
+                     <p className={`text-sm mb-4 ${theme === 'Midnight' ? 'text-indigo-400/80' : 'text-indigo-600/80'}`}>
+                        Move your existing data from browser storage to Supabase for cross-device sync. This is a one-time operation that copies all operators, tasks, schedules, and settings to the cloud.
+                     </p>
+                     <div className={`mb-4 p-3 rounded-lg ${theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : 'bg-blue-50 border border-blue-200'}`}>
+                        <p className={`text-xs ${theme === 'Midnight' ? 'text-slate-300' : 'text-slate-700'}`}>
+                           <strong>Note:</strong> After successful migration, the app will continue using IndexedDB. To switch to Supabase storage, contact your administrator.
+                        </p>
+                     </div>
+                     <button
+                        onClick={async () => {
+                           if (!confirm('Are you sure you want to migrate your data to Supabase? This will copy all your local data to the cloud.')) {
+                              return;
+                           }
+
+                           setIsMigrating(true);
+                           try {
+                              const { migrateToSupabase } = await import('./scripts/migrateToSupabase');
+                              const results = await migrateToSupabase();
+
+                              setMigrationResults(results);
+
+                              const totalSuccess = results.reduce((sum, r) => sum + r.success, 0);
+                              const totalFailed = results.reduce((sum, r) => sum + r.failed, 0);
+
+                              if (totalFailed === 0) {
+                                 addToast('success', `Migration complete! ${totalSuccess} items migrated successfully.`);
+                              } else {
+                                 addToast('warning', `Migration completed with ${totalFailed} errors. ${totalSuccess} items migrated.`);
+                              }
+                           } catch (err: any) {
+                              console.error('Migration failed:', err);
+                              addToast('error', `Migration failed: ${err.message}`);
+                           } finally {
+                              setIsMigrating(false);
+                           }
+                        }}
+                        disabled={isMigrating}
+                        className={`py-3 px-6 rounded-xl text-sm font-bold transition-colors ${
+                           isMigrating
+                              ? 'bg-gray-400 cursor-not-allowed text-white'
+                              : theme === 'Midnight'
+                              ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                              : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                        }`}
+                     >
+                        {isMigrating ? (
+                           <>
+                              <Loader2 className="inline-block h-4 w-4 mr-2 animate-spin" />
+                              Migrating...
+                           </>
+                        ) : (
+                           <>
+                              <Cloud className="inline-block h-4 w-4 mr-2" />
+                              Migrate to Supabase
+                           </>
+                        )}
+                     </button>
+
+                     {/* Migration Results */}
+                     {migrationResults && migrationResults.length > 0 && (
+                        <div className={`mt-6 p-4 rounded-lg ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-white'} border ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+                           <h4 className={`text-sm font-bold mb-3 ${styles.text}`}>Migration Results</h4>
+                           <div className="space-y-2">
+                              {migrationResults.map((result) => (
+                                 <div key={result.entity} className="text-sm">
+                                    <div className="flex justify-between items-center">
+                                       <span className={`font-medium ${styles.text}`}>{result.entity}</span>
+                                       <div className="flex gap-3 text-xs">
+                                          <span className="text-emerald-500">✓ {result.success}</span>
+                                          {result.failed > 0 && <span className="text-red-500">✗ {result.failed}</span>}
+                                       </div>
+                                    </div>
+                                    {result.errors.length > 0 && (
+                                       <ul className={`mt-1 ml-4 text-xs space-y-1 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-600'}`}>
+                                          {result.errors.slice(0, 3).map((err, idx) => (
+                                             <li key={idx}>• {err}</li>
+                                          ))}
+                                          {result.errors.length > 3 && (
+                                             <li>• ... and {result.errors.length - 3} more errors</li>
+                                          )}
+                                       </ul>
+                                    )}
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     )}
                   </div>
 
                   {/* Danger Zone */}
@@ -7493,7 +7591,7 @@ function App() {
   );
 
   // --- Auth Checking Screen ---
-  if (authChecking) {
+  if (authLoading || authChecking) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="flex flex-col items-center gap-4">
@@ -7504,14 +7602,9 @@ function App() {
     );
   }
 
-  // --- Setup Screen (First Run) ---
-  if (needsSetup) {
-    return <SetupPage onComplete={handleSetupComplete} onSwitchToLogin={() => setNeedsSetup(false)} />;
-  }
-
   // --- Login Screen (Not Authenticated) ---
-  if (!currentUser) {
-    return <LoginPage onLogin={handleLogin} onSwitchToSetup={() => setNeedsSetup(true)} />;
+  if (!isAuthenticated) {
+    return <LoginPage />;
   }
 
   // --- Loading Screen ---
@@ -7593,8 +7686,6 @@ function App() {
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}
           onOpenFeedback={() => setShowFeedbackModal(true)}
-          user={currentUser}
-          onSignOut={handleSignOut}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
@@ -8692,6 +8783,20 @@ function App() {
             <p className={`text-sm mb-4 ${styles.muted}`}>
               Are you sure you want to delete <span className="font-semibold" style={{ color: taskToDelete.color }}>{taskToDelete.name}</span>? This action cannot be undone.
             </p>
+
+            {/* Show warning if operators have this task's skill */}
+            {(() => {
+              const affectedOps = operators.filter(op => op.skills.includes(taskToDelete.requiredSkill));
+              return affectedOps.length > 0 && (
+                <div className={`p-3 rounded-lg mb-4 ${theme === 'Midnight' ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-amber-50 border border-amber-200'}`}>
+                  <p className={`text-sm ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-700'}`}>
+                    <AlertTriangle className="inline-block w-4 h-4 mr-1" />
+                    {affectedOps.length} operator{affectedOps.length !== 1 ? 's have' : ' has'} the "{taskToDelete.requiredSkill}" skill.
+                    The skill will remain in the Skills Library.
+                  </p>
+                </div>
+              );
+            })()}
 
             <div className="flex gap-3">
               <button
