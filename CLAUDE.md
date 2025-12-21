@@ -127,9 +127,13 @@ npm run preview      # Preview production build
    - ✅ **Claude Code Review** - AI-powered code quality review (optional)
    - ✅ **Security Review** - Automated security scanning (optional)
 
-5. **Merge** only after all checks pass:
+5. **Enable auto-merge** (recommended) or merge manually:
 
    ```bash
+   # Auto-merge: PR merges automatically when CI passes
+   gh pr merge <PR-number> --auto --squash
+
+   # Manual merge: Merge immediately (only if CI already passed)
    gh pr merge <PR-number> --squash
    ```
 
