@@ -424,6 +424,8 @@ export interface Operator {
   // Soft delete flag - archived operators are hidden but not permanently deleted
   archived?: boolean;
   archivedAt?: string; // ISO date string when archived
+  // Supabase sync fields (optional, only used when syncing with Supabase)
+  employeeId?: string; // External employee ID for HR system integration
 }
 
 export interface ScheduleAssignment {
@@ -445,6 +447,9 @@ export interface WeeklySchedule {
   status: 'Draft' | 'Published';
   locked: boolean; // If true, schedule cannot be edited
   days: DailySchedule[];
+  // Supabase sync fields (optional, computed from weekNumber/year)
+  weekStartDate?: string; // ISO date string of Monday for this week
+  weekLabel?: string; // Human-readable label like "Week 1, 2024"
 }
 
 export const INITIAL_SKILLS = [

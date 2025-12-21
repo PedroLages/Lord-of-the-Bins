@@ -7,7 +7,7 @@
  * - Offline cached sessions
  */
 
-import { getSupabaseClient, isSupabaseConfigured } from './client';
+import { requireSupabaseClient, getSupabaseClient, isSupabaseConfigured } from './client';
 import type { User as SupabaseUser, Session } from '@supabase/supabase-js';
 
 // App user type (maps to users table)
@@ -50,7 +50,7 @@ export async function signIn(
   identifier: string,
   password: string
 ): Promise<CloudUser> {
-  const supabase = getSupabaseClient();
+  const supabase = requireSupabaseClient();
 
   // Determine if this is an email or user code
   const email = isEmail(identifier) ? identifier : userCodeToEmail(identifier);
@@ -85,8 +85,12 @@ export async function signIn(
       .eq('id', authData.user.id)
       .single();
 
-    if (profileError) {
-      throw new Error(`Failed to fetch user profile: ${profileError.message}`);
+    if (profileError || !profile) {
+      throw new Error(
+        profileError
+          ? `Failed to fetch user profile: ${profileError.message}`
+          : 'User profile not found'
+      );
     }
 
     const user: CloudUser = {
@@ -148,11 +152,7 @@ export async function signUp(
   shiftId: string,
   email?: string
 ): Promise<CloudUser> {
-  const supabase = getSupabaseClient();
-
-  if (!supabase) {
-    throw new Error('Cannot sign up in offline mode');
-  }
+  const supabase = requireSupabaseClient();
 
   const internalEmail = userCodeToEmail(userCode);
 
