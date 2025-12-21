@@ -7,7 +7,7 @@ import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
   Trash2, Plus, Edit2, Search, Settings, Filter, MoreHorizontal,
-  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, BarChart3, Clock, CheckCircle2, Palette, Monitor,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, BarChart3, Clock, CheckCircle2, CheckCircle, Palette, Monitor,
   Layout, Moon, Grid, LayoutDashboard, LogOut, Menu, Box, Zap,
   TrendingUp, Activity, PieChart, Bell, Globe, Lock, Unlock, AlertTriangle,
   ArrowRight, Briefcase, Award, UserCheck, Sliders, Puzzle, Shield,
@@ -136,6 +136,10 @@ function App() {
   // Flex operator editing state
   const [editingFlexName, setEditingFlexName] = useState<string | null>(null);
   const [flexNameInput, setFlexNameInput] = useState('');
+
+  // Verification UI state
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // App State - will be populated from storage
   const [operators, setOperators] = useState<Operator[]>([]);
@@ -403,8 +407,8 @@ function App() {
     return result;
   }, [taskRequirements]);
 
-  // Validate schedule whenever schedule OR task requirements change
-  // This ensures warnings are shown on initial load and when requirements are modified
+  // Automatically validate for CRITICAL errors only (skill mismatch, availability, double assignment)
+  // Soft warnings (understaffed/overstaffed) are shown only via "Run Verification" button
   useEffect(() => {
     if (!dataInitialized || !currentWeek) return;
 
@@ -414,8 +418,8 @@ function App() {
       currentWeek.days.forEach((d, idx) => {
         assignmentsMap[idx] = d.assignments;
       });
-      // Show staffing warnings during initial validation (not during manual editing)
-      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+      // showStaffingWarnings: false = only critical errors (skill mismatch, availability, etc.)
+      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
       setScheduleWarnings(warnings);
     } catch (err) {
       console.error('[Validation] Failed to validate schedule:', err);
@@ -428,6 +432,19 @@ function App() {
       }]);
     }
   }, [dataInitialized, currentWeek, operators, tasks, taskRequirements]);
+
+  // Keyboard shortcut for Run Verification (Cmd/Ctrl + Shift + V)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        handleRunVerification();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentWeek, operators, tasks, taskRequirements]); // Dependencies needed for handleRunVerification
 
   // Validate Plan Builder requirements whenever schedule or requirements change
   useEffect(() => {
@@ -1480,6 +1497,193 @@ function App() {
     // Warnings will be re-validated automatically by the useEffect
   };
 
+  // --- Palette Application Handler ---
+
+  const applyPaletteToTasks = (palette: typeof COLOR_PALETTES[0]) => {
+    // Apply palette colors with STRICT Delta E accessibility checking
+    // Rule 0: TC tasks (Process, People, Off Process) keep FIXED colors - never change
+    // Rule 1: NEVER assign the same color to two tasks until ALL palette colors are used
+    // Rule 2: When all colors used, reuse the one with MAXIMUM Delta E from assigned colors
+    // Rule 3: Prioritize colors meeting Delta E ≥ 25 threshold
+
+    // Separate TC tasks from regular tasks
+    const regularTasks = tasks.filter(t => !isTCTask(t));
+
+    const finalAssignments = new Map<string, number>(); // taskId -> colorIndex
+    const assignedColors: string[] = []; // Track assigned hex colors for Delta E checking
+    const usedIndices = new Set<number>(); // Track used palette indices (STRICT - no duplicates)
+    const usageCount = new Map<number, number>(); // Track how many times each index is used (for reuse scenarios)
+
+    // Sort REGULAR tasks by their original color's closest match to prioritize similar colors together
+    const taskColorMapping = regularTasks.map(task => ({
+      task,
+      closestIndex: findClosestPaletteIndex(task.color, palette),
+      originalColor: task.color
+    })).sort((a, b) => a.closestIndex - b.closestIndex);
+
+    const paletteSize = palette.colors.length;
+
+    // Process each task with STRICT unique color assignment
+    taskColorMapping.forEach(({ task, closestIndex, originalColor }) => {
+      const preferredHex = palette.colors[closestIndex].hex;
+      let selectedIndex = closestIndex;
+      let selectedHex = preferredHex;
+
+      // STRICT: Check if this palette index is already used
+      const indexAlreadyUsed = usedIndices.has(closestIndex);
+
+      // Also check Delta E conflict with assigned colors
+      const hasDeltaEConflict = assignedColors.some(
+        assignedHex => calculateDeltaEHex(preferredHex, assignedHex) < MIN_DELTA_E_THRESHOLD
+      );
+
+      if (indexAlreadyUsed || hasDeltaEConflict) {
+        // Need to find an alternative color
+
+        // Step 1: Find all UNUSED indices
+        const unusedIndices: number[] = [];
+        for (let i = 0; i < paletteSize; i++) {
+          if (!usedIndices.has(i)) {
+            unusedIndices.push(i);
+          }
+        }
+
+        if (unusedIndices.length > 0) {
+          // Step 2: Among unused, find those meeting Delta E threshold
+          const accessibleUnused = unusedIndices.filter(i => {
+            const hex = palette.colors[i].hex;
+            return assignedColors.every(
+              ah => calculateDeltaEHex(hex, ah) >= MIN_DELTA_E_THRESHOLD
+            );
+          });
+
+          if (accessibleUnused.length > 0) {
+            // Pick the one closest to original color (prefer visual similarity)
+            let bestDelta = Infinity;
+            accessibleUnused.forEach(i => {
+              const delta = calculateDeltaEHex(palette.colors[i].hex, originalColor);
+              if (delta < bestDelta) {
+                bestDelta = delta;
+                selectedIndex = i;
+              }
+            });
+          } else {
+            // No unused colors meet threshold - pick unused with MAX min-Delta E
+            let maxMinDeltaE = -1;
+            unusedIndices.forEach(i => {
+              const candidateHex = palette.colors[i].hex;
+              let minDeltaE = assignedColors.length > 0 ? Infinity : 100;
+              assignedColors.forEach(ah => {
+                const d = calculateDeltaEHex(candidateHex, ah);
+                if (d < minDeltaE) minDeltaE = d;
+              });
+              if (minDeltaE > maxMinDeltaE) {
+                maxMinDeltaE = minDeltaE;
+                selectedIndex = i;
+              }
+            });
+          }
+          selectedHex = palette.colors[selectedIndex].hex;
+        } else {
+          // ALL palette colors used - must reuse (14 tasks > 12 colors)
+          // Strategy: Pick the LEAST used color, with tie-breaker being max Delta E from recent colors
+          const minUsageCount = Math.min(...Array.from({ length: paletteSize }, (_, i) => usageCount.get(i) || 0));
+          const leastUsedIndices = Array.from({ length: paletteSize }, (_, i) => i)
+            .filter(i => (usageCount.get(i) || 0) === minUsageCount);
+
+          // Among least used, pick one with max Delta E from recently assigned colors
+          let maxMinDeltaE = -1;
+          const recentColors = assignedColors.slice(-5); // Check against last 5 assigned colors
+          leastUsedIndices.forEach(i => {
+            const candidateHex = palette.colors[i].hex;
+            let minDeltaE = recentColors.length > 0 ? Infinity : 100;
+            recentColors.forEach(ah => {
+              const d = calculateDeltaEHex(candidateHex, ah);
+              if (d < minDeltaE) minDeltaE = d;
+            });
+            if (minDeltaE > maxMinDeltaE) {
+              maxMinDeltaE = minDeltaE;
+              selectedIndex = i;
+            }
+          });
+          selectedHex = palette.colors[selectedIndex].hex;
+        }
+      }
+
+      // Assign the color
+      finalAssignments.set(task.id, selectedIndex);
+      assignedColors.push(selectedHex);
+      usedIndices.add(selectedIndex);
+      usageCount.set(selectedIndex, (usageCount.get(selectedIndex) || 0) + 1);
+    });
+
+    // Apply the final assignments
+    // TC tasks get their FIXED colors, regular tasks get palette colors
+    const updatedTasks = tasks.map(task => {
+      // TC tasks always use fixed colors - never change with palette
+      const tcColor = getTCFixedColor(task);
+      if (tcColor) {
+        return { ...task, color: tcColor, textColor: getContrastTextColor(tcColor) };
+      }
+      // Regular tasks get palette assignment
+      const colorIndex = finalAssignments.get(task.id) ?? findClosestPaletteIndex(task.color, palette);
+      const newColor = palette.colors[colorIndex].hex;
+      return { ...task, color: newColor, textColor: getContrastTextColor(newColor) };
+    });
+
+    setTasks(updatedTasks);
+    saveTasks(updatedTasks);
+    toast.success(`Applied "${palette.name}" to ${regularTasks.length} tasks`);
+  };
+
+  // --- Verification Handler ---
+
+  const handleRunVerification = () => {
+    if (!currentWeek) return;
+
+    setIsVerifying(true);
+    setVerificationStatus('idle');
+
+    try {
+      const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+      const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+      currentWeek.days.forEach((d, idx) => {
+        assignmentsMap[idx] = d.assignments;
+      });
+      // showStaffingWarnings: true = show ALL warnings (critical + soft)
+      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+      setScheduleWarnings(warnings);
+
+      // Show toast feedback
+      if (warnings.length === 0) {
+        toast.success('✅ No issues found! Schedule looks good.');
+        setVerificationStatus('success');
+        // Reset success state after 2 seconds
+        setTimeout(() => setVerificationStatus('idle'), 2000);
+      } else {
+        const criticalCount = warnings.filter(w => ['skill_mismatch', 'availability_conflict', 'double_assignment'].includes(w.type)).length;
+        const softCount = warnings.length - criticalCount;
+
+        if (criticalCount > 0) {
+          toast.error(`Found ${criticalCount} critical issue${criticalCount !== 1 ? 's' : ''} and ${softCount} warning${softCount !== 1 ? 's' : ''}`);
+          setVerificationStatus('error');
+        } else {
+          toast.warning(`Found ${softCount} warning${softCount !== 1 ? 's' : ''}`);
+          setVerificationStatus('error');
+        }
+        // Reset error state after 2 seconds
+        setTimeout(() => setVerificationStatus('idle'), 2000);
+      }
+    } catch (err) {
+      console.error('[Verification] Failed to run verification:', err);
+      toast.error('Verification failed. Try again or contact support if this persists.');
+      setVerificationStatus('error');
+      setTimeout(() => setVerificationStatus('idle'), 2000);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
   // --- Publish Handlers ---
 
   const handlePublishSchedule = () => {
@@ -2236,10 +2440,14 @@ function App() {
 
     if (theme === 'Midnight') {
       return {
-        backgroundColor: 'transparent',
-        color: task.textColor === '#000000' ? '#e2e8f0' : task.color, // Adjust dark text
-        border: `1px solid ${task.color}50`,
-        borderRadius: '6px'
+        backgroundColor: `${task.color}0D`, // 5% opacity background by default
+        color: task.color,
+        border: `1px solid ${task.color}80`, // 50% opacity border, 1px width
+        borderRadius: '6px',
+        transition: 'all 150ms ease-in-out',
+        // CSS custom properties for hover effects (border only, no glow)
+        ['--task-color' as any]: task.color,
+        ['--hover-border' as any]: `${task.color}`, // 100% opacity border on hover
       };
     }
 
@@ -2248,7 +2456,8 @@ function App() {
       backgroundColor: task.color,
       color: task.textColor,
       boxShadow: `0 2px 4px ${task.color}40`,
-      border: `1px solid ${task.color}20`
+      border: `1px solid ${task.color}20`,
+      transition: 'all 150ms ease-in-out'
     };
   };
 
@@ -3307,16 +3516,16 @@ function App() {
                       <div className="flex-1 content-start">
                          <div className="flex flex-wrap gap-1.5">
                             {op.skills.slice(0, 5).map(skill => (
-                               <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md border ${
+                               <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md ${
                                  theme === 'Midnight'
-                                   ? 'bg-slate-900 border-slate-700 text-slate-400'
-                                   : 'bg-white border-gray-200 text-gray-600'
+                                   ? 'bg-slate-700 text-slate-300'
+                                   : 'bg-gray-100 text-gray-700'
                                }`}>
                                   {skill}
                                </span>
                             ))}
                             {op.skills.length > 5 && (
-                               <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-500'}`}>
+                               <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-200 text-gray-600'}`}>
                                  +{op.skills.length - 5}
                                </span>
                             )}
@@ -3435,15 +3644,15 @@ function App() {
                        <td className="px-4 py-3">
                          <div className="flex flex-wrap gap-1 max-w-xs">
                            {op.skills.slice(0, 3).map(skill => (
-                             <span key={skill} className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
-                               theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-gray-600'
+                             <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md ${
+                               theme === 'Midnight' ? 'bg-slate-700 text-slate-300' : 'bg-gray-100 text-gray-700'
                              }`}>
                                {skill}
                              </span>
                            ))}
                            {op.skills.length > 3 && (
-                             <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
-                               theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+                             <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${
+                               theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-200 text-gray-600'
                              }`}>
                                +{op.skills.length - 3}
                              </span>
@@ -6441,6 +6650,50 @@ function App() {
                )}
              </div>
 
+             <div className={`hidden sm:block h-4 w-px ${theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-300'}`}></div>
+
+             {/* Run Verification Button */}
+             <button
+               onClick={handleRunVerification}
+               disabled={isVerifying}
+               title="Run full schedule verification (⌘⇧V)"
+               className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-medium min-h-[44px] transition-all ${
+                 isVerifying
+                   ? theme === 'Midnight'
+                     ? 'bg-slate-700 text-slate-400 cursor-wait'
+                     : 'bg-gray-200 text-gray-400 cursor-wait'
+                   : verificationStatus === 'success'
+                   ? theme === 'Midnight'
+                     ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                     : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
+                   : verificationStatus === 'error'
+                   ? theme === 'Midnight'
+                     ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                     : 'bg-red-100 text-red-600 hover:bg-red-200'
+                   : theme === 'Midnight'
+                   ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30'
+                   : 'bg-blue-100 text-blue-600 hover:bg-blue-200'
+               }`}
+             >
+               {isVerifying ? (
+                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
+               ) : verificationStatus === 'success' ? (
+                 <CheckCircle className="h-3.5 w-3.5" />
+               ) : (
+                 <Shield className="h-3.5 w-3.5" />
+               )}
+               <span>{isVerifying ? 'Verifying...' : 'Run Verification'}</span>
+               {!isVerifying && scheduleWarnings.length > 0 && (
+                 <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                   theme === 'Midnight'
+                     ? 'bg-amber-500/40 text-amber-300'
+                     : 'bg-amber-200 text-amber-900'
+                 }`}>
+                   {scheduleWarnings.length}
+                 </span>
+               )}
+             </button>
+
              {/* Lock indicator */}
              {currentWeek.locked && (
                <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
@@ -7156,7 +7409,7 @@ function App() {
                                   ? 'ring-2 ring-offset-1 ring-purple-500 shadow-lg z-10 brightness-110'
                                   : ''
                             }`}
-                            style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
+                            style={getTaskStyle(taskId)}
                           >
                             {task ? task.name : '-'}
                             {/* Selection checkmark - shows on selected cells */}
@@ -7382,7 +7635,7 @@ function App() {
                                   ? 'ring-2 ring-offset-1 ring-emerald-500 shadow-lg z-10 brightness-110'
                                   : ''
                             }`}
-                            style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
+                            style={getTaskStyle(taskId)}
                           >
                             {task ? task.name : '-'}
                             {/* Selection checkmark - shows on selected cells */}
@@ -7645,6 +7898,12 @@ function App() {
 
   return (
     <div className={`flex h-screen w-full font-sans selection:bg-blue-100 transition-colors duration-300 ${styles.bg}`}>
+      {/* Task pill hover styles for Midnight theme */}
+      <style>{`
+        button[style*="--task-color"]:hover {
+          border-color: var(--hover-border) !important;
+        }
+      `}</style>
 
       {styles.layout === 'sidebar' && (
         <Sidebar
@@ -7658,6 +7917,8 @@ function App() {
           onSignOut={handleSignOut}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          currentWeekLabel={getWeekLabel(currentWeek)}
+          currentWeekRange={getWeekRangeString(new Date(currentWeek.days[0].date))}
         />
       )}
 
@@ -7747,6 +8008,41 @@ function App() {
             <p className={`text-sm mb-6 ${styles.muted}`}>
               {getWeekLabel(currentWeek)} ({getWeekRangeString(new Date(currentWeek.days[0].date))})
             </p>
+
+            {/* Warning Count - show if there are any warnings */}
+            {scheduleWarnings.length > 0 && (
+              <div className={`p-4 rounded-xl mb-4 border ${
+                theme === 'Midnight'
+                  ? 'bg-amber-500/10 border-amber-500/30'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className={`h-5 w-5 shrink-0 ${
+                    theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                  }`} />
+                  <div className="flex-1">
+                    <p className={`text-sm font-medium ${
+                      theme === 'Midnight' ? 'text-amber-200' : 'text-amber-900'
+                    }`}>
+                      {scheduleWarnings.length} warning{scheduleWarnings.length !== 1 ? 's' : ''} found
+                    </p>
+                    <button
+                      onClick={() => {
+                        setShowPublishModal(false);
+                        handleRunVerification();
+                      }}
+                      className={`text-xs mt-1 underline decoration-dotted transition-colors ${
+                        theme === 'Midnight'
+                          ? 'text-indigo-400 hover:text-indigo-300'
+                          : 'text-blue-600 hover:text-blue-500'
+                      }`}
+                    >
+                      Click "Run Verification" in the header to view full validation details →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className={`p-4 rounded-xl mb-6 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'}`}>
               <label className="flex items-center gap-3 cursor-pointer">

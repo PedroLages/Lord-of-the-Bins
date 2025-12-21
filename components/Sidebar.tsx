@@ -13,6 +13,8 @@ interface SidebarProps {
   onSignOut?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  currentWeekLabel?: string; // e.g., "Week 51"
+  currentWeekRange?: string; // e.g., "Dec 16-20, 2024"
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -25,7 +27,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   user,
   onSignOut,
   isCollapsed = false,
-  onToggleCollapse
+  onToggleCollapse,
+  currentWeekLabel = 'Week 51', // Default fallback
+  currentWeekRange = 'Dec 16-20, 2025' // Default fallback
 }) => {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -104,8 +108,8 @@ const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center justify-between">
                 <div>
                   <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'Midnight' ? 'text-indigo-400' : 'text-blue-400'}`}>Current Cycle</span>
-                  <p className="text-lg font-bold tracking-tight text-white mt-0.5">Week 50</p>
-                  <p className={`text-xs font-medium ${styles.heading}`}>Dec 9 – Dec 13, 2024</p>
+                  <p className="text-lg font-bold tracking-tight text-white mt-0.5">{currentWeekLabel}</p>
+                  <p className={`text-xs font-medium ${styles.heading}`}>{currentWeekRange}</p>
                 </div>
                 <div className="flex flex-col items-center">
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -117,8 +121,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Collapsed Current Cycle indicator */}
           {isCollapsed && (
-            <div className={`mt-3 mx-auto px-2 py-1.5 rounded-lg text-center ${styles.cycleBg}`} title="Week 50 - Dec 9-13, 2024">
-              <span className={`text-xs font-bold ${theme === 'Midnight' ? 'text-indigo-300' : 'text-blue-300'}`}>W50</span>
+            <div className={`mt-3 mx-auto px-2 py-1.5 rounded-lg text-center ${styles.cycleBg}`} title={`${currentWeekLabel} - ${currentWeekRange}`}>
+              <span className={`text-xs font-bold ${theme === 'Midnight' ? 'text-indigo-300' : 'text-blue-300'}`}>{currentWeekLabel.replace('Week ', 'W')}</span>
             </div>
           )}
         </div>
