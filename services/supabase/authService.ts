@@ -331,11 +331,13 @@ export async function updateProfile(updates: {
     throw new Error('Not authenticated');
   }
 
-  const updateData = {
+  // Type the update data for better type safety
+  const updateData: UpdateTables<'users'> = {
     display_name: updates.displayName,
     email: updates.email,
   };
 
+  // Cast client to any to work around Supabase type inference limitations
   const { error } = await (supabase as any)
     .from('users')
     .update(updateData)

@@ -78,15 +78,22 @@ function mapScheduleToDb(schedule: WeeklySchedule, shiftId: string) {
   };
 }
 
+/**
+ * Calculate ISO week number following ISO 8601 standard
+ */
+function getISOWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
 function mapDbToSchedule(db: any): WeeklySchedule {
-  // Compute weekNumber and year from weekStartDate
+  // Compute weekNumber and year from weekStartDate using ISO 8601
   const startDate = new Date(db.week_start_date);
   const year = startDate.getFullYear();
-
-  // Get week number (ISO week)
-  const firstDayOfYear = new Date(year, 0, 1);
-  const pastDaysOfYear = (startDate.getTime() - firstDayOfYear.getTime()) / 86400000;
-  const weekNumber = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+  const weekNumber = getISOWeekNumber(startDate);
 
   return {
     id: db.local_id || db.id,
