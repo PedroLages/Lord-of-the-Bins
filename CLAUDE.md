@@ -115,11 +115,21 @@ npm run preview      # Preview production build
    git commit -m "feat: add your feature description"
    ```
 
-3. **Push to remote** and create a PR:
+3. **Push to remote** and create a PR with **auto-merge enabled**:
 
    ```bash
    git push -u origin feature/your-feature-name
-   gh pr create --title "Add feature X" --body "Description..."
+
+   # Create PR and enable auto-merge in one command
+   gh pr create --title "Add feature X" --body "Description..." && \
+   gh pr merge --auto --squash
+   ```
+
+   Or use the helper alias (recommended):
+
+   ```bash
+   # After creating the PR manually, enable auto-merge
+   gh pr merge --auto --squash
    ```
 
 4. **CI/CD checks** will run automatically:
@@ -127,15 +137,17 @@ npm run preview      # Preview production build
    - ✅ **Claude Code Review** - AI-powered code quality review (optional)
    - ✅ **Security Review** - Automated security scanning (optional)
 
-5. **Enable auto-merge** (recommended) or merge manually:
+5. **Auto-merge** happens automatically once all checks pass ✨
 
-   ```bash
-   # Auto-merge: PR merges automatically when CI passes
-   gh pr merge <PR-number> --auto --squash
-
-   # Manual merge: Merge immediately (only if CI already passed)
-   gh pr merge <PR-number> --squash
-   ```
+   > **Note**: Auto-merge is the default workflow. The PR will merge automatically when:
+   > - All required CI checks pass (build, type check)
+   > - No merge conflicts exist
+   >
+   > If you need to merge immediately (and CI already passed):
+   >
+   > ```bash
+   > gh pr merge <PR-number> --squash
+   > ```
 
 ### Branch Naming Convention
 
