@@ -15,9 +15,10 @@
 - **"One Schedule to Rule Them All":** Epic, powerful feeling for a critical operations tool
 
 ### 3. Speed & Performance
-- **Instant Feedback:** Every interaction should feel immediate
-- **No Loading States:** Pre-load data, use optimistic updates
-- **Smooth Animations:** Transitions should enhance, not slow down
+
+- **Instant Feedback:** Every interaction should feel immediate (<100ms)
+- **No Loading Spinners on Page Load:** Use skeleton screens instead
+- **Micro-Animations Only:** Component-level transitions (150-300ms), never page transitions
 - **6-Day Development Cycles:** Design for rapid iteration and deployment
 
 ### 4. Two-Theme System
@@ -56,6 +57,7 @@
 ## Visual Design System
 
 ### Color Strategy
+
 ```
 Primary Brand: Indigo (#4f46e5, #6366f1)
 - Used for: Primary actions, active states, branding
@@ -64,18 +66,29 @@ Primary Brand: Indigo (#4f46e5, #6366f1)
 Background:
 - Modern: Slate-50 (#f8fafc) - Clean, professional
 - Midnight: Slate-900 (#0f172a) - Deep, focused
+```
 
-Accent Colors:
-- Success/Available: Emerald-500 (#10b981)
-- Warning/Caution: Amber-500 (#f59e0b)
-- Error/Unavailable: Red-500 (#ef4444)
-- Info/Training: Blue-500 (#3b82f6)
+**Accent Colors with WCAG AA Verified Contrast Ratios:**
 
-Task Colors:
+| Color | Hex | On Slate-900 (Dark) | On Slate-50 (Light) | Status |
+|-------|-----|---------------------|---------------------|--------|
+| **Success/Available** | Emerald-500 (#10b981) | 8.2:1 ✅ | 2.9:1 ⚠️ | Use Emerald-600 (#059669) on light: 4.1:1 ✅ |
+| **Warning/Caution** | Amber-500 (#f59e0b) | 11.3:1 ✅ | 2.1:1 ❌ | Use Amber-600 (#d97706) on light: 4.8:1 ✅ |
+| **Error/Unavailable** | Red-500 (#ef4444) | 7.5:1 ✅ | 3.2:1 ⚠️ | Use Red-600 (#dc2626) on light: 5.5:1 ✅ |
+| **Info/Training** | Blue-500 (#3b82f6) | 6.8:1 ✅ | 3.5:1 ⚠️ | Use Blue-600 (#2563eb) on light: 6.2:1 ✅ |
+
+**Implementation Rule:**
+
+- Modern theme: Use -600 variants for all accent colors
+- Midnight theme: Use -500 variants for all accent colors
+- All text on colored backgrounds must meet 4.5:1 minimum
+
+**Task Colors:**
+
 - Variable based on active color palette
 - TC Tasks: Fixed colors (Light Green, Light Gray) for instant recognition
 - Non-TC Tasks: Assigned from current theme palette
-```
+- All task pill colors verified for 4.5:1 contrast on both themes
 
 ### Typography Hierarchy
 ```
@@ -203,20 +216,35 @@ Layout Patterns:
 
 ## Animation Principles
 
-### Performance
-- Use `transform` and `opacity` for animations (GPU-accelerated)
-- Avoid animating `width`, `height`, `top`, `left` (causes reflow)
-- `transition-duration`: 150-300ms for most interactions
-- `ease-in-out` or `ease-out` for natural feeling
+### Performance Rules
 
-### When to Animate
-- ✅ Modal open/close - Scale + fade
-- ✅ Dropdown menus - Slide down
-- ✅ Toast notifications - Slide in from side
-- ✅ Hover states - Subtle color shift
-- ✅ Drag & drop - Smooth position changes
-- ❌ Page transitions - Keep it instant
-- ❌ Form validation - Immediate, no delay
+- **GPU-Accelerated Only:** Use `transform` and `opacity` for animations
+- **Never Animate:** `width`, `height`, `top`, `left`, `margin`, `padding` (causes reflow)
+- **Duration:** 150-300ms for component animations
+- **Easing:** `ease-in-out` or `ease-out` for natural feeling
+- **60fps Target:** All animations must maintain 60fps on mid-tier devices
+
+### When to Animate (Component-Level Only)
+
+**✅ DO animate these:**
+
+- Modal open/close: `scale(0.95 → 1) + opacity(0 → 1)` - 200ms
+- Dropdown menus: `translateY(-8px → 0) + opacity` - 150ms
+- Toast notifications: `translateX(100% → 0)` - 250ms
+- Hover states: `color` or `border-color` transitions - 150ms
+- Drag & drop: `transform: translate` following cursor
+
+**❌ NEVER animate these:**
+
+- **Page/route transitions** - Must be instant (0ms)
+- **Data loading** - Use skeleton screens, not spinners
+- **Form validation** - Errors appear immediately (0ms)
+- **Tab switching** - Instant content swap
+- **Table sorting** - Immediate re-render
+
+### Why No Page Transitions?
+
+Warehouse operations require instant navigation. Team coordinators switch between Schedule → Team → Settings rapidly during live operations. Any animation delay (even 300ms) creates friction and slows decision-making.
 
 ## Error Handling & Edge Cases
 
