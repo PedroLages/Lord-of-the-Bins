@@ -211,3 +211,4 @@ For bugs or feature requests, please contact the development team.
 Developed for warehouse decanting teams to optimize shift planning and operator assignments.
 
 *"Where chaos meets order, and every pallet finds its destiny."*
+
