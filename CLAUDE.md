@@ -6,8 +6,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Documentation
 
+### Root Documentation
+
+- **README.md** - Project overview, quick start, architecture, and tech stack
 - **REQUIREMENTS.md** - Full requirements and feature specifications
 - **TODOS.md** - Task list organized by priority (P1, P2, P3). Add new todos here when requested.
+
+### Organized Documentation (docs/)
+
+**docs/algorithms/** - Algorithm research and analysis
+
+- ALGORITHM_COMPARISON_REPORT.md - V1 vs V2 vs V3 vs V4 algorithm comparison
+- ALGORITHM_ENHANCEMENT_COMPLETE.md - V4 enhancement completion report
+- ALGORITHM_FIX_PLAN.md - Algorithm fix planning document
+- ALGORITHM_QUICK_SUMMARY.md - Quick reference for algorithm features
+- ALGORITHM_TEST_REPORT.md - Algorithm testing methodology
+- ALGORITHM_TEST_RESULTS.md - Test results for various algorithm versions
+- ALGORITHM_V3_TEST_RESULTS.md - V3-specific test results
+- CP_SAT_ANALYSIS.md - Constraint Programming SAT solver analysis
+- SCHEDULING_ALGORITHM_ANALYSIS.md - Detailed scheduling algorithm analysis
+- SCHEDULING_V2_PLAN.md - V2 algorithm planning document
+
+**docs/test-reports/** - Testing documentation
+
+- AUTHENTICATION_TEST_REPORT.md - Authentication system testing
+- COMPREHENSIVE_TEST_RESULTS.md - End-to-end test results
+- E2E_ALGORITHM_TEST_RESULTS.md - Algorithm E2E test results
+- TEST_REPORT_FILL_GAPS.md - Fill gaps feature testing
+- TEST_REPORT_PLANNING_MODAL.md - Planning modal testing
+
+**docs/ux-research/** - User experience research
+
+- PLANNING_MODAL_UX_RESEARCH.md - Planning modal UX analysis
+- SETTINGS_PAGE_UX_RESEARCH.md - Settings page UX research
+- SETTINGS_UX_ANALYSIS.md - General settings UX analysis
+- SIDEBAR_UX_RESEARCH.md - Sidebar navigation research
+- TASK_REQUIREMENTS_UX_ANALYSIS.md - Task requirements UI research
+- UX_WEEKLY_ASSIGNMENT_RECOMMENDATION.md - Weekly assignment UX recommendations
+
+**docs/planning/** - Project planning documents
+
+- COLOR_THEMES_EXPLORATION.md - Color theme design exploration
+- ENHANCED_MULTI_OBJECTIVE_PLAN.md - Multi-objective optimization planning
+- FINAL_SUMMARY.md - Project milestone summary
+- IMPLEMENTATION_PLAN.md - Feature implementation plans
+- SESSION_SUMMARY.md - Development session summaries
+
+**docs/project/** - Project setup and migration
+
+- SETUP_SUMMARY.md - Project setup guide
+
+**docs/archive/** - Deprecated documentation
+
+- SUPABASE_INTEGRATION_PLAN.md - (Archived) Supabase integration plan
+- SUPABASE_SETUP_GUIDE.md - (Archived) Supabase setup instructions
+- SUPABASE_STATUS.md - (Archived) Supabase integration status
+
+**docs/** - Core guides
+
+- AUTH_MIGRATION_GUIDE.md - Migration from Supabase to local auth
+- PRE_MERGE_VERIFICATION.md - Pre-merge verification checklist
 
 ## Project Overview
 
