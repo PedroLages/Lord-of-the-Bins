@@ -93,6 +93,69 @@ npm run build        # Build for production
 npm run preview      # Preview production build
 ```
 
+## Git Workflow
+
+**IMPORTANT:** All feature development MUST use git branches and pull requests. Never commit directly to `main`.
+
+### Workflow for New Features
+
+1. **Create a feature branch** from `main`:
+
+   ```bash
+   git checkout main
+   git pull
+   git checkout -b feature/your-feature-name
+   # or: chore/..., fix/..., docs/...
+   ```
+
+2. **Develop and commit** your changes:
+
+   ```bash
+   git add .
+   git commit -m "feat: add your feature description"
+   ```
+
+3. **Push to remote** and create a PR:
+
+   ```bash
+   git push -u origin feature/your-feature-name
+   gh pr create --title "Add feature X" --body "Description..."
+   ```
+
+4. **CI/CD checks** will run automatically:
+   - ✅ **CI** - TypeScript type check and build verification
+   - ✅ **Claude Code Review** - AI-powered code quality review (optional)
+   - ✅ **Security Review** - Automated security scanning (optional)
+
+5. **Merge** only after all checks pass:
+
+   ```bash
+   gh pr merge <PR-number> --squash
+   ```
+
+### Branch Naming Convention
+
+- `feature/` - New features (e.g., `feature/add-dark-mode`)
+- `fix/` - Bug fixes (e.g., `fix/schedule-validation`)
+- `chore/` - Maintenance tasks (e.g., `chore/update-dependencies`)
+- `docs/` - Documentation updates (e.g., `docs/update-readme`)
+
+### Commit Message Format
+
+Follow conventional commits:
+
+```text
+<type>: <description>
+
+[optional body]
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+```
+
+Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `style`, `perf`
+
 ## Architecture
 
 ### Tech Stack
