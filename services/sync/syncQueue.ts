@@ -217,12 +217,12 @@ async function processQueueItem(
 
   switch (operation) {
     case 'insert': {
-      const { error } = await supabase.from(table).insert(data);
+      const { error } = await (supabase as any).from(table).insert(data);
       if (error) throw new Error(error.message);
       break;
     }
     case 'update': {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from(table)
         .update(data)
         .eq('local_id', item.localId);

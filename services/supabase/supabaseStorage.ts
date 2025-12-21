@@ -5,10 +5,11 @@
  * Used by HybridStorageService for cloud sync.
  */
 
-import { getSupabaseClient, isSupabaseConfigured } from './client';
+import { getSupabaseClient, requireSupabaseClient, isSupabaseConfigured } from './client';
 import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
 import type { SchedulingRules } from '../schedulingService';
 import type { AppSettings } from '../storage/database';
+import type { InsertTables, DbOperator, DbTask, DbSchedule, DbTaskRequirement, DbSchedulingRules, DbAppSettings } from './types';
 
 // Type mapping helpers
 function mapOperatorToDb(op: Operator, shiftId: string) {
@@ -73,13 +74,24 @@ function mapScheduleToDb(schedule: WeeklySchedule, shiftId: string) {
     week_label: schedule.weekLabel,
     status: schedule.status || 'Draft',
     locked: schedule.locked || false,
-    assignments: schedule.days,
+    assignments: schedule.days as any, // Cast to Json for database storage
   };
 }
 
 function mapDbToSchedule(db: any): WeeklySchedule {
+  // Compute weekNumber and year from weekStartDate
+  const startDate = new Date(db.week_start_date);
+  const year = startDate.getFullYear();
+
+  // Get week number (ISO week)
+  const firstDayOfYear = new Date(year, 0, 1);
+  const pastDaysOfYear = (startDate.getTime() - firstDayOfYear.getTime()) / 86400000;
+  const weekNumber = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+
   return {
     id: db.local_id || db.id,
+    weekNumber,
+    year,
     weekStartDate: db.week_start_date,
     weekLabel: db.week_label,
     status: db.status,
@@ -134,15 +146,15 @@ export class SupabaseStorageService {
   }
 
   async saveOperator(operator: Operator): Promise<void> {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!this.isAvailable()) return;
 
+    const supabase = requireSupabaseClient();
     const shiftId = this.requireShiftId();
     const dbOperator = mapOperatorToDb(operator, shiftId);
 
     const { error } = await supabase
       .from('operators')
-      .upsert(dbOperator, { onConflict: 'local_id' });
+      .upsert(dbOperator as any, { onConflict: 'local_id' });
 
     if (error) throw new Error(`Failed to save operator: ${error.message}`);
   }
@@ -178,15 +190,15 @@ export class SupabaseStorageService {
   }
 
   async saveTask(task: TaskType): Promise<void> {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!this.isAvailable()) return;
 
+    const supabase = requireSupabaseClient();
     const shiftId = this.requireShiftId();
     const dbTask = mapTaskToDb(task, shiftId);
 
     const { error } = await supabase
       .from('tasks')
-      .upsert(dbTask, { onConflict: 'local_id' });
+      .upsert(dbTask as any, { onConflict: 'local_id' });
 
     if (error) throw new Error(`Failed to save task: ${error.message}`);
   }
@@ -239,15 +251,15 @@ export class SupabaseStorageService {
   }
 
   async saveSchedule(schedule: WeeklySchedule): Promise<void> {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!this.isAvailable()) return;
 
+    const supabase = requireSupabaseClient();
     const shiftId = this.requireShiftId();
     const dbSchedule = mapScheduleToDb(schedule, shiftId);
 
     const { error } = await supabase
       .from('schedules')
-      .upsert(dbSchedule, { onConflict: 'shift_id,week_start_date' });
+      .upsert(dbSchedule as any, { onConflict: 'shift_id,week_start_date' });
 
     if (error) throw new Error(`Failed to save schedule: ${error.message}`);
   }
@@ -287,20 +299,22 @@ export class SupabaseStorageService {
   }
 
   async saveTaskRequirement(req: TaskRequirement): Promise<void> {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!this.isAvailable()) return;
 
+    const supabase = requireSupabaseClient();
     const shiftId = this.requireShiftId();
 
+    const taskReqData = {
+      local_id: req.taskId,
+      shift_id: shiftId,
+      task_id: req.taskId, // Will need to be mapped to UUID in production
+      enabled: true,
+      default_requirements: req.defaultRequirements as any, // Cast to Json for database storage
+      daily_overrides: (req.dailyOverrides || {}) as any, // Cast to Json for database storage
+    };
+
     const { error } = await supabase.from('task_requirements').upsert(
-      {
-        local_id: req.taskId,
-        shift_id: shiftId,
-        task_id: req.taskId, // Will need to be mapped to UUID in production
-        enabled: true,
-        default_requirements: req.defaultRequirements,
-        daily_overrides: req.dailyOverrides || {},
-      },
+      taskReqData as any,
       { onConflict: 'shift_id,task_id' }
     );
 
@@ -327,43 +341,48 @@ export class SupabaseStorageService {
 
     if (!data) return null;
 
+    // Type assertion for query result
+    const rules = data as DbSchedulingRules;
+
     return {
-      algorithm: data.algorithm as any,
-      strictSkillMatching: data.strict_skill_matching,
-      allowConsecutiveHeavyShifts: data.allow_consecutive_heavy_shifts,
-      prioritizeFlexForExceptions: data.prioritize_flex_for_exceptions,
-      respectPreferredStations: data.respect_preferred_stations,
-      maxConsecutiveDaysOnSameTask: data.max_consecutive_days_on_same_task,
-      fairDistribution: data.fair_distribution,
-      balanceWorkload: data.balance_workload,
-      autoAssignCoordinators: data.auto_assign_coordinators,
-      randomizationFactor: data.randomization_factor,
-      prioritizeSkillVariety: data.prioritize_skill_variety,
+      algorithm: rules.algorithm as any,
+      strictSkillMatching: rules.strict_skill_matching,
+      allowConsecutiveHeavyShifts: rules.allow_consecutive_heavy_shifts,
+      prioritizeFlexForExceptions: rules.prioritize_flex_for_exceptions,
+      respectPreferredStations: rules.respect_preferred_stations,
+      maxConsecutiveDaysOnSameTask: rules.max_consecutive_days_on_same_task,
+      fairDistribution: rules.fair_distribution,
+      balanceWorkload: rules.balance_workload,
+      autoAssignCoordinators: rules.auto_assign_coordinators,
+      randomizationFactor: rules.randomization_factor,
+      prioritizeSkillVariety: rules.prioritize_skill_variety,
       useV2Algorithm: false,
     };
   }
 
   async saveSchedulingRules(rules: SchedulingRules): Promise<void> {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!this.isAvailable()) return;
 
+    const supabase = requireSupabaseClient();
     const shiftId = this.requireShiftId();
 
+    const rulesData = {
+      shift_id: shiftId,
+      algorithm: rules.algorithm,
+      strict_skill_matching: rules.strictSkillMatching,
+      allow_consecutive_heavy_shifts: rules.allowConsecutiveHeavyShifts,
+      prioritize_flex_for_exceptions: rules.prioritizeFlexForExceptions,
+      respect_preferred_stations: rules.respectPreferredStations,
+      max_consecutive_days_on_same_task: rules.maxConsecutiveDaysOnSameTask,
+      fair_distribution: rules.fairDistribution,
+      balance_workload: rules.balanceWorkload,
+      auto_assign_coordinators: rules.autoAssignCoordinators,
+      randomization_factor: rules.randomizationFactor,
+      prioritize_skill_variety: rules.prioritizeSkillVariety,
+    };
+
     const { error } = await supabase.from('scheduling_rules').upsert(
-      {
-        shift_id: shiftId,
-        algorithm: rules.algorithm,
-        strict_skill_matching: rules.strictSkillMatching,
-        allow_consecutive_heavy_shifts: rules.allowConsecutiveHeavyShifts,
-        prioritize_flex_for_exceptions: rules.prioritizeFlexForExceptions,
-        respect_preferred_stations: rules.respectPreferredStations,
-        max_consecutive_days_on_same_task: rules.maxConsecutiveDaysOnSameTask,
-        fair_distribution: rules.fairDistribution,
-        balance_workload: rules.balanceWorkload,
-        auto_assign_coordinators: rules.autoAssignCoordinators,
-        randomization_factor: rules.randomizationFactor,
-        prioritize_skill_variety: rules.prioritizeSkillVariety,
-      },
+      rulesData as any,
       { onConflict: 'shift_id' }
     );
 
@@ -390,9 +409,12 @@ export class SupabaseStorageService {
 
     if (!data) return null;
 
+    // Type assertion for query result
+    const settings = data as DbAppSettings;
+
     return {
       id: 'app_settings',
-      theme: data.theme as any,
+      theme: settings.theme as any,
       schedulingRules: await this.getSchedulingRules() || {} as any,
     };
   }
