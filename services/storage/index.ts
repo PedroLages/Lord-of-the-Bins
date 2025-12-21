@@ -5,7 +5,7 @@
  * Use `storage` singleton for all data operations.
  */
 
-export { storage, SupabaseStorageService } from './supabaseStorage';
+export { storage, IndexedDBStorage } from './indexedDBStorage';
 export { db, isIndexedDBSupported, getStorageEstimate } from './database';
 export type { AppSettings } from './database';
 export type { StorageService, ExportData } from './storageService';

@@ -1,11 +1,10 @@
 /**
- * Login Page - Supabase Authentication
+ * Login Page - Matches app's Midnight theme
  *
  * Design philosophy:
  * - Uses app's Midnight theme colors (indigo accent, #0f172a background)
  * - Warehouse-inspired visuals with character
  * - Playful but professional
- * - Supports both User Code (EMP001) and Email login
  */
 
 import React, { useState } from 'react';
@@ -20,15 +19,16 @@ import {
   Package,
   Boxes,
 } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { login } from '../services/authService';
+import type { DemoUser } from '../types';
 
 interface LoginPageProps {
+  onLogin: (user: DemoUser) => void;
   onSwitchToSetup?: () => void;
 }
 
-export default function LoginPage({ onSwitchToSetup }: LoginPageProps) {
-  const { signIn } = useAuth();
-  const [userCodeOrEmail, setUserCodeOrEmail] = useState('');
+export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,8 +38,8 @@ export default function LoginPage({ onSwitchToSetup }: LoginPageProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!userCodeOrEmail.trim() || !password) {
-      setError('Please enter user code or email and password');
+    if (!username.trim() || !password) {
+      setError('Please enter batch number and password');
       return;
     }
 
@@ -47,13 +47,8 @@ export default function LoginPage({ onSwitchToSetup }: LoginPageProps) {
     setError(null);
 
     try {
-      const { error: signInError } = await signIn(userCodeOrEmail, password);
-
-      if (signInError) {
-        setError(signInError.message || 'Login failed');
-        setIsLoading(false);
-      }
-      // Success - AuthContext will handle user state update and app will redirect
+      const user = await login(username, password);
+      onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       setIsLoading(false);
@@ -97,9 +92,21 @@ export default function LoginPage({ onSwitchToSetup }: LoginPageProps) {
             Lord of<br />
             <span className="text-indigo-400">the Bins</span>
           </h1>
-          <p className="text-slate-400 text-lg leading-relaxed">
+          <p className="text-slate-400 text-lg leading-relaxed mb-8">
             Where chaos meets order, and every pallet finds its destiny.
           </p>
+
+          {/* Stats or features */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <div className="text-2xl font-bold text-indigo-400">99.2%</div>
+              <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Scheduling accuracy</div>
+            </div>
+            <div className="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <div className="text-2xl font-bold text-indigo-400">24</div>
+              <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Active operators</div>
+            </div>
+          </div>
         </div>
 
         <div className="relative z-10 text-slate-600 text-xs">
@@ -128,35 +135,38 @@ export default function LoginPage({ onSwitchToSetup }: LoginPageProps) {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* User Code or Email Field */}
+            {/* Batch Number Field */}
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-2">
-                User Code or Email
+                Batch Number
               </label>
               <div className="relative">
                 <div className={`absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center border-r transition-colors ${
-                  focusedField === 'usercode'
+                  focusedField === 'username'
                     ? 'border-indigo-500/30 bg-indigo-500/5'
                     : 'border-slate-700 bg-slate-800/50'
                 } rounded-l-lg`}>
                   <span className={`text-sm font-mono transition-colors ${
-                    focusedField === 'usercode' ? 'text-indigo-400' : 'text-slate-500'
+                    focusedField === 'username' ? 'text-indigo-400' : 'text-slate-500'
                   }`}>#</span>
                 </div>
                 <input
                   type="text"
-                  value={userCodeOrEmail}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={username}
                   onChange={(e) => {
-                    setUserCodeOrEmail(e.target.value);
+                    const value = e.target.value.replace(/\D/g, '');
+                    setUsername(value);
                     setError(null);
                   }}
-                  onFocus={() => setFocusedField('usercode')}
+                  onFocus={() => setFocusedField('username')}
                   onBlur={() => setFocusedField(null)}
-                  placeholder="EMP001 or email@example.com"
+                  placeholder="12345"
                   autoComplete="username"
                   autoFocus
                   className={`w-full pl-14 pr-4 py-3.5 bg-slate-900 border rounded-lg text-white placeholder-slate-600 focus:outline-none transition-all ${
-                    focusedField === 'usercode'
+                    focusedField === 'username'
                       ? 'border-indigo-500/50 ring-1 ring-indigo-500/20'
                       : 'border-slate-800 hover:border-slate-700'
                   }`}

@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Sidebar from './components/Sidebar';
-// import SetupPage from './components/SetupPage'; // Not needed with Supabase auth
+import SetupPage from './components/SetupPage';
 import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
@@ -15,10 +15,10 @@ import {
   Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
   Palmtree, Thermometer, GraduationCap, CircleDashed,
   CalendarX2, Shuffle, Scale, GripVertical, Command,
-  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Cloud
+  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Info
 } from 'lucide-react';
 import {
-  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
+  Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
   type DemoUser, type AppearanceSettings, type ColorTheme, COLOR_PALETTES, DEFAULT_APPEARANCE_SETTINGS, getPaletteById, addRecentColor, getContrastTextColor, isColorInPalette, findClosestPaletteIndex,
   calculateDeltaEHex, MIN_DELTA_E_THRESHOLD, findAccessiblePaletteColors, sortByDeltaEFromColor,
   isTCTask, getTCFixedColor,
@@ -26,14 +26,14 @@ import {
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
   type PlanningTemplate
 } from './types';
-import { useAuth } from './contexts/AuthContext';
+import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
 import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
-// import ProfileSettings from './components/ProfileSettings'; // Temporarily disabled for Supabase migration
+import ProfileSettings from './components/ProfileSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -91,10 +91,7 @@ const THEME_STYLES = {
 };
 
 function App() {
-  // Auth hook - Supabase authentication
-  const { user: authUser, isLoading: authLoading, isAuthenticated } = useAuth();
-
-  // Storage hook - handles persistence (only initialize when authenticated)
+  // Storage hook - handles persistence
   const {
     loadingState,
     error: storageError,
@@ -106,6 +103,7 @@ function App() {
     saveTask,
     saveSchedule,
     saveSettings,
+    saveSkills,
     saveAppearance,
     saveTaskRequirement,
     deleteTaskRequirement,
@@ -117,17 +115,17 @@ function App() {
     getAllPlanningTemplates,
     savePlanningTemplate,
     deletePlanningTemplate,
-  } = useStorage({ enabled: isAuthenticated });
+  } = useStorage();
 
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  // Auth state (legacy - gradually being migrated to Supabase)
+  // Auth state
   const [authChecking, setAuthChecking] = useState(true);
-  // const [needsSetup, setNeedsSetup] = useState(false); // Not needed with Supabase
-  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null); // TODO: Remove once all components use authUser
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
 
   // Toast system
   const toast = useToasts();
@@ -142,11 +140,9 @@ function App() {
   // App State - will be populated from storage
   const [operators, setOperators] = useState<Operator[]>([]);
   const [tasks, setTasks] = useState<TaskType[]>([]);
+  const [skills, setSkills] = useState<string[]>(INITIAL_SKILLS);
   const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE_SETTINGS);
   const [fillGapsSettings, setFillGapsSettings] = useState<FillGapsSettings>(DEFAULT_FILL_GAPS_SETTINGS);
-
-  // Derive skills from tasks (unified approach - tasks ARE skills)
-  const skills = [...new Set(tasks.map(t => t.requiredSkill))].sort();
 
   // Week Navigation State - Initialize with current week dynamically
   const [currentWeek, setCurrentWeek] = useState<WeeklySchedule>(() => createEmptyWeek(new Date()));
@@ -156,6 +152,7 @@ function App() {
   const [planBuilderViolations, setPlanBuilderViolations] = useState<PlanBuilderViolation[]>([]);
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
   const [showCriticalWarningsModal, setShowCriticalWarningsModal] = useState(false);
+  const [showAlgorithmComparisonModal, setShowAlgorithmComparisonModal] = useState(false);
 
   // Initialize state from storage when data is loaded
   useEffect(() => {
@@ -166,6 +163,7 @@ function App() {
       setTheme(initialData.theme);
       setSchedulingRules(initialData.schedulingRules);
       setTaskRequirements(initialData.taskRequirements || []);
+      setSkills(initialData.skills || INITIAL_SKILLS);
       setAppearance(initialData.appearance || DEFAULT_APPEARANCE_SETTINGS);
       setFillGapsSettings(initialData.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS);
 
@@ -297,20 +295,59 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
-  // Sync Supabase auth user with local state (for gradual migration)
+  // Check auth state on mount
   useEffect(() => {
-    if (!authLoading) {
-      setAuthChecking(false);
-      // For now, we'll keep currentUser as null since we're using Supabase
-      // The Sidebar already uses authUser from context
-      // TODO: Gradually remove currentUser state once all components use authUser
-    }
-  }, [authLoading, authUser]);
+    const checkAuth = async () => {
+      try {
+        // First check if any users exist
+        const usersExist = await hasUsers();
+        if (!usersExist) {
+          setNeedsSetup(true);
+          setAuthChecking(false);
+          return;
+        }
 
-  // Legacy auth handlers - no longer used with Supabase
-  // const handleSignOut = useCallback(() => { ... }, [toast]);
-  // const handleSetupComplete = useCallback(async () => { ... }, []);
-  // const handleLogin = useCallback((user: DemoUser) => { ... }, [toast]);
+        // Check if user is logged in
+        const user = await getCurrentUser();
+        if (user) {
+          setCurrentUser(user);
+          // Apply user's theme preference
+          if (user.preferences?.theme) {
+            setTheme(user.preferences.theme);
+          }
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  // Handle sign out
+  const handleSignOut = useCallback(() => {
+    authLogout();
+    setCurrentUser(null);
+    toast.info('Signed out successfully');
+  }, [toast]);
+
+  // Handle setup complete
+  const handleSetupComplete = useCallback(async () => {
+    setNeedsSetup(false);
+    // After setup, user should now log in
+    setAuthChecking(false);
+  }, []);
+
+  // Handle login
+  const handleLogin = useCallback((user: DemoUser) => {
+    setCurrentUser(user);
+    if (user.preferences?.theme) {
+      setTheme(user.preferences.theme);
+    }
+    toast.success(`Welcome back, ${user.displayName}!`);
+  }, [toast]);
 
   // Settings State
   const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile'>('appearance');
@@ -366,24 +403,31 @@ function App() {
     return result;
   }, [taskRequirements]);
 
-  // Helper to run schedule validation (reduces code duplication)
-  const runScheduleValidation = useCallback((schedule: WeeklySchedule) => {
-    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
-    schedule.days.forEach((d, idx) => {
-      assignmentsMap[idx] = d.assignments;
-    });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
-    setScheduleWarnings(warnings);
-  }, [operators, tasks, getValidationRequirements]);
-
   // Validate schedule whenever schedule OR task requirements change
   // This ensures warnings are shown on initial load and when requirements are modified
   useEffect(() => {
-    if (dataInitialized && currentWeek) {
-      runScheduleValidation(currentWeek);
+    if (!dataInitialized || !currentWeek) return;
+
+    try {
+      const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+      const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+      currentWeek.days.forEach((d, idx) => {
+        assignmentsMap[idx] = d.assignments;
+      });
+      // Show staffing warnings during initial validation (not during manual editing)
+      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+      setScheduleWarnings(warnings);
+    } catch (err) {
+      console.error('[Validation] Failed to validate schedule:', err);
+      setScheduleWarnings([{
+        type: 'system_error',
+        message: 'Unable to validate schedule. Please refresh the page.',
+        severity: 'error',
+        operatorId: '',
+        day: 'Mon'
+      }]);
     }
-  }, [dataInitialized, currentWeek, taskRequirements, runScheduleValidation]);
+  }, [dataInitialized, currentWeek, operators, tasks, taskRequirements]);
 
   // Validate Plan Builder requirements whenever schedule or requirements change
   useEffect(() => {
@@ -432,8 +476,6 @@ function App() {
   const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [isMigrating, setIsMigrating] = useState(false);
-  const [migrationResults, setMigrationResults] = useState<any[] | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<TaskType | null>(null);
   const [skillToDelete, setSkillToDelete] = useState<string | null>(null);
   const [newSkillName, setNewSkillName] = useState('');
@@ -751,14 +793,12 @@ function App() {
       return;
     }
     const newTaskId = `t${Date.now()}`;
-    const requiredSkill = newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting';
-
     const newTask: TaskType = {
       id: newTaskId,
       name: newTaskName.trim(),
       color: newTaskColor,
       textColor: '#ffffff',
-      requiredSkill,
+      requiredSkill: newTaskSkill || skills.filter(s => !TC_SKILLS.includes(s))[0] || 'Decanting',
       requiredOperators: 1,
     };
     setTasks(prev => [...prev, newTask]);
@@ -885,7 +925,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -952,7 +993,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1181,7 +1223,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1288,7 +1331,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1325,7 +1369,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during undo - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1362,7 +1407,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during redo - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1533,10 +1579,16 @@ function App() {
     try {
       const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
-      // Build current assignments map for the algorithm (include pinned field)
+      // Build current assignments map for the algorithm (operatorId -> dayName -> assignment)
+      // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-      currentWeek.days.forEach((day, idx) => {
-        currentAssignmentsMap[idx] = day.assignments;
+      currentWeek.days.forEach((day) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
+        });
       });
 
       const scheduleResult = generateOptimizedSchedule({
@@ -1546,7 +1598,8 @@ function App() {
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
         taskRequirements,
-        excludedTasks
+        excludedTasks,
+        weekSeed: currentWeek.weekNumber * 100 + currentWeek.year // Unique seed per week
       });
 
       // Handle both single schedule and multi-objective array results
@@ -1717,7 +1770,7 @@ function App() {
   };
 
   // Handle applying the planning modal configuration and running smart fill
-  const handlePlanApply = (config: WeeklyPlanningConfig, exclusions?: WeeklyExclusions) => {
+  const handlePlanApply = async (config: WeeklyPlanningConfig, exclusions?: WeeklyExclusions) => {
     setIsGenerating(true);
 
     // Store config for this week so it persists when modal reopens
@@ -1773,6 +1826,10 @@ function App() {
 
       console.log(`[Plan Builder] Starting with ${planTaskRequirements.length} existing Staffing Requirements`);
 
+      // Track which tasks have been configured by Plan Builder
+      // On first touch, we CLEAR existing requirements so Plan Builder SETS, not MERGES
+      const planBuilderTouchedTasks = new Set<string>();
+
       // Helper to add requirement to a task (either defaultRequirements or dailyOverrides)
       const addRequirementToTask = (
         taskId: string,
@@ -1798,12 +1855,22 @@ function App() {
           count: count
         };
 
+        // On FIRST touch of this task by Plan Builder, CLEAR existing requirements
+        // This ensures Plan Builder SETS requirements, not MERGES with Settings
+        // Applies to BOTH "every-day" and day-specific rules for consistency
+        if (!planBuilderTouchedTasks.has(taskId)) {
+          planBuilderTouchedTasks.add(taskId);
+          const oldReqs = existingReq.defaultRequirements.map(r => `${r.count}x ${r.type}`).join(', ') || 'none';
+          existingReq.defaultRequirements = []; // Clear ALL existing requirements
+          existingReq.dailyOverrides = {}; // Also clear daily overrides from Settings
+          console.log(`[Plan Builder] First touch for task ${taskId}: cleared old requirements (${oldReqs})`);
+        }
+
         if (timeframe === 'every-day') {
           // Add to default requirements (applies to all days)
-          // This REPLACES the Staffing Requirements default for this type
           const existingTypeReq = existingReq.defaultRequirements.find(r => r.type === reqType);
           if (existingTypeReq) {
-            // Plan Builder rules OVERRIDE existing requirements (not max)
+            // Multiple Plan Builder rules for same type - override count
             existingTypeReq.count = count;
           } else {
             existingReq.defaultRequirements.push(reqEntry);
@@ -1811,7 +1878,7 @@ function App() {
           console.log(`[Plan Builder] Set default requirement: ${count}x ${reqType} (every day)`);
         } else {
           // Add to day-specific override
-          // Other days will still use defaultRequirements from Staffing Requirements
+          // Note: defaultRequirements were cleared on first touch, so other days will have 0 requirements
           const day = timeframe as WeekDay;
           if (!existingReq.dailyOverrides) {
             existingReq.dailyOverrides = {};
@@ -1821,12 +1888,12 @@ function App() {
           }
           const existingDayReq = existingReq.dailyOverrides[day]!.find(r => r.type === reqType);
           if (existingDayReq) {
-            // Plan Builder rules OVERRIDE existing requirements (not max)
+            // Multiple Plan Builder rules for same type - override count
             existingDayReq.count = count;
           } else {
             existingReq.dailyOverrides[day]!.push(reqEntry);
           }
-          console.log(`[Plan Builder] Added daily override: ${count}x ${reqType} on ${day} (other days use Staffing Requirements: ${existingReq.defaultRequirements.map(r => `${r.count}x ${r.type}`).join(', ') || 'none'})`);
+          console.log(`[Plan Builder] Added daily override: ${count}x ${reqType} on ${day}`);
         }
       };
 
@@ -1868,7 +1935,8 @@ function App() {
       // These rules RESERVE operators for specific tasks by pre-pinning them
       // =========================================================================
       const pairingRules = config.rules.filter((r): r is OperatorPairingRule => r.type === 'pairing' && r.enabled);
-      const reservedAssignments: Record<string, Record<string, { taskId: string; pinned: boolean }>> = {}; // dayIndex -> operatorId -> assignment
+      // reservedAssignments structure: operatorId -> dayName -> assignment (matches scheduler expectation)
+      const reservedAssignments: Record<string, Record<string, { taskId: string; pinned: boolean }>> = {};
 
       pairingRules.forEach(rule => {
         if (rule.preference !== 'want') return; // Only process "want" rules for reservations
@@ -1904,22 +1972,19 @@ function App() {
           if (!op) return;
 
           ruleDays.forEach(day => {
-            const dayIndex = daysList.indexOf(day);
-            if (dayIndex === -1) return;
-
             // Check operator availability
             if (!op.availability[day]) {
               console.log(`[Plan Builder] Skipping ${op.name} on ${day} - not available`);
               return;
             }
 
-            if (!reservedAssignments[dayIndex]) {
-              reservedAssignments[dayIndex] = {};
+            if (!reservedAssignments[opId]) {
+              reservedAssignments[opId] = {};
             }
 
             // Only reserve if not already reserved by another rule
-            if (!reservedAssignments[dayIndex][opId]) {
-              reservedAssignments[dayIndex][opId] = {
+            if (!reservedAssignments[opId][day]) {
+              reservedAssignments[opId][day] = {
                 taskId: matchingTask!.id,
                 pinned: true // Mark as pinned so Smart Fill respects it
               };
@@ -1929,42 +1994,53 @@ function App() {
         });
       });
 
-      // Build current assignments map for the algorithm (include pinned field)
-      // MERGE reserved assignments from pairing rules with existing assignments
+      // Build current assignments map for the algorithm (operatorId -> dayName -> assignment)
+      // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-      currentWeek.days.forEach((day, idx) => {
-        currentAssignmentsMap[idx] = { ...day.assignments };
+      currentWeek.days.forEach((day) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          currentAssignmentsMap[opId][day.dayOfWeek] = { ...assignment };
+        });
+      });
 
-        // Apply reserved assignments from pairing rules
-        // These override non-locked existing assignments
-        if (reservedAssignments[idx]) {
-          Object.entries(reservedAssignments[idx]).forEach(([opId, reserved]) => {
-            const existing = currentAssignmentsMap[idx][opId];
-            // Only apply if not already locked
-            if (!existing?.locked) {
-              currentAssignmentsMap[idx][opId] = {
-                taskId: reserved.taskId,
-                locked: false,
-                pinned: true // Pinned so Smart Fill respects it
-              };
-            }
-          });
-        }
+      // Apply reserved assignments from pairing rules (People option)
+      // These override non-locked existing assignments
+      Object.entries(reservedAssignments).forEach(([opId, dayAssignments]) => {
+        Object.entries(dayAssignments).forEach(([day, reserved]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          const existing = currentAssignmentsMap[opId][day];
+          // Only apply if not already locked
+          if (!existing?.locked) {
+            currentAssignmentsMap[opId][day] = {
+              taskId: reserved.taskId,
+              locked: false,
+              pinned: true // Pinned so Smart Fill respects it
+            };
+          }
+        });
       });
 
       console.log(`[Plan Builder] Final task requirements (${planTaskRequirements.length} total):`, JSON.stringify(planTaskRequirements, null, 2));
 
       // Save Plan Builder requirements to state so validation shows correct warnings
       // This ensures "Understaffed" and "Overstaffed" warnings match what the user configured
+      const previousRequirements = taskRequirements;
       setTaskRequirements(planTaskRequirements);
 
-      // Persist each requirement to storage (fire and forget, don't block schedule generation)
-      planTaskRequirements.forEach(req => {
-        saveTaskRequirement(req).catch(err => {
-          console.error(`[Plan Builder] Failed to save requirement for ${req.taskId}:`, err);
-        });
-      });
-      console.log(`[Plan Builder] Saved ${planTaskRequirements.length} requirements to state and storage`);
+      // Persist each requirement to storage with proper error handling
+      try {
+        await Promise.all(planTaskRequirements.map(req => saveTaskRequirement(req)));
+        console.log(`[Plan Builder] Successfully saved ${planTaskRequirements.length} requirements to storage`);
+      } catch (err) {
+        console.error('[Plan Builder] Failed to save requirements:', err);
+        toast.error(`Failed to save staffing requirements. Your Plan Builder configuration may not persist after page reload.`);
+        // Keep state updated (optimistic update) but warn user about persistence failure
+      }
 
       // Run smart fill with the plan's requirements
       const scheduleResult = generateOptimizedSchedule({
@@ -1974,7 +2050,8 @@ function App() {
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
         taskRequirements: planTaskRequirements.length > 0 ? planTaskRequirements : taskRequirements,
-        excludedTasks: config.excludedTasks || []
+        excludedTasks: config.excludedTasks || [],
+        weekSeed: currentWeek.weekNumber * 100 + currentWeek.year // Unique seed per week
       });
 
       // Handle both single schedule and multi-objective array results
@@ -2010,10 +2087,12 @@ function App() {
 
           const task = tasks.find(t => t.id === assignment.taskId);
           if (task) {
+            // Check if this was a reserved assignment from People rules (should be pinned)
+            const wasReserved = reservedAssignments[assignment.operatorId]?.[assignment.day as WeekDay];
             newSchedule.days[dayIndex].assignments[assignment.operatorId] = {
               taskId: task.id,
               locked: false,
-              pinned: false
+              pinned: wasReserved ? true : false // Preserve pinned status for People assignments
             };
             assignmentCount++;
           }
@@ -3595,9 +3674,10 @@ function App() {
              Schedule Config
            </div>
            {[
-             { id: 'task-management', label: 'Skills', icon: Award },          // 1. Foundation: define competencies (unified Tasks→Skills)
-             { id: 'requirements', label: 'Staffing Requirements', icon: Users }, // 2. Per-task staffing needs
-             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },   // 3. Behavioral configuration
+             { id: 'skills', label: 'Skills Library', icon: Award },           // 1. Foundation: define competencies
+             { id: 'task-management', label: 'Tasks', icon: Layers },          // 2. Tasks use skills
+             { id: 'requirements', label: 'Staffing Requirements', icon: Users }, // 3. Per-task staffing needs
+             { id: 'automation', label: 'Scheduling Rules', icon: Sliders },   // 4. Behavioral configuration
            ].map((item) => (
              <button
                key={item.id}
@@ -3878,21 +3958,230 @@ function App() {
               </div>
            )}
 
-           {settingsTab === 'profile' && authUser?.profile && (
-              <div className={`p-8 ${styles.text}`}>
-                <div className={`rounded-xl p-6 border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
-                  <h3 className="text-lg font-semibold mb-2">Profile Settings</h3>
-                  <p className={styles.muted}>User profile management coming soon with Supabase integration.</p>
-                  <div className="mt-4 space-y-2">
-                    <p><strong>Name:</strong> {authUser.profile.display_name}</p>
-                    <p><strong>Role:</strong> {authUser.profile.role}</p>
-                    <p><strong>User Code:</strong> {authUser.profile.user_code}</p>
-                    {authUser.profile.email && <p><strong>Email:</strong> {authUser.profile.email}</p>}
-                  </div>
-                  <p className={`mt-4 text-sm ${styles.muted}`}>
-                    Profile editing, password changes, and profile pictures will be available once Supabase integration is complete.
-                  </p>
-                </div>
+           {settingsTab === 'profile' && currentUser && (
+              <ProfileSettings
+                user={currentUser}
+                theme={theme}
+                styles={styles}
+                onUpdateUser={async (updates) => {
+                  const updated = await updateUser(currentUser.id, updates);
+                  if (updated) {
+                    setCurrentUser(updated);
+                    // Also update session data for sidebar
+                    updateSessionData({
+                      displayName: updated.displayName,
+                      profilePicture: updated.profilePicture,
+                    });
+                  }
+                }}
+                onChangePassword={async (current, newPass) => {
+                  await changePassword(currentUser.id, current, newPass);
+                }}
+                onProcessPicture={processProfilePicture}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'skills' && (
+              <div className="space-y-6">
+                 {/* Header */}
+                 <div className="flex items-center justify-between">
+                    <div>
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Skills Library</h2>
+                       <p className={`text-sm mt-1 ${styles.muted}`}>Manage the skills that can be assigned to operators and required by tasks.</p>
+                    </div>
+                 </div>
+
+                 {/* Add New Skill */}
+                 <div className={`flex items-center gap-3 p-4 rounded-xl border ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <input
+                       type="text"
+                       value={newSkillName}
+                       onChange={(e) => setNewSkillName(e.target.value)}
+                       placeholder="Enter new skill name..."
+                       className={`flex-1 px-4 py-2.5 rounded-lg border outline-none focus:ring-2 ${
+                          theme === 'Midnight'
+                             ? 'bg-slate-900 border-slate-600 text-white placeholder:text-slate-500 focus:ring-indigo-500'
+                             : 'bg-white border-gray-200 text-slate-900 placeholder:text-gray-400 focus:ring-blue-500'
+                       }`}
+                       onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newSkillName.trim()) {
+                             const trimmed = newSkillName.trim();
+                             if (skills.includes(trimmed)) {
+                                toast.error('Skill already exists');
+                                return;
+                             }
+                             const updated = [...skills, trimmed];
+                             setSkills(updated);
+                             saveSkills(updated);
+                             setNewSkillName('');
+                             toast.success(`Skill "${trimmed}" added`);
+                          }
+                       }}
+                    />
+                    <button
+                       onClick={() => {
+                          const trimmed = newSkillName.trim();
+                          if (!trimmed) return;
+                          if (skills.includes(trimmed)) {
+                             toast.error('Skill already exists');
+                             return;
+                          }
+                          const updated = [...skills, trimmed];
+                          setSkills(updated);
+                          saveSkills(updated);
+                          setNewSkillName('');
+                          toast.success(`Skill "${trimmed}" added`);
+                       }}
+                       disabled={!newSkillName.trim()}
+                       className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors ${
+                          theme === 'Midnight'
+                             ? 'bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-slate-700 disabled:text-slate-500'
+                             : 'bg-blue-600 hover:bg-blue-500 text-white disabled:bg-gray-200 disabled:text-gray-400'
+                       }`}
+                    >
+                       <Plus className="w-4 h-4" />
+                       Add Skill
+                    </button>
+                 </div>
+
+                 {/* Skills Categories */}
+                 <div className="space-y-6">
+                    {/* TC Skills (System) */}
+                    <div>
+                       <div className="flex items-center gap-2 mb-3">
+                          <Shield className={`w-4 h-4 ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`} />
+                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'}`}>
+                             Coordinator Skills (System)
+                          </h3>
+                       </div>
+                       <div className="flex flex-wrap gap-2">
+                          {TC_SKILLS.map((skill) => (
+                             <div
+                                key={skill}
+                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
+                                   theme === 'Midnight'
+                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                                      : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                }`}
+                             >
+                                <Lock className="w-3 h-3" />
+                                {skill}
+                             </div>
+                          ))}
+                       </div>
+                       <p className={`text-xs mt-2 ${styles.muted}`}>
+                          These skills are reserved for Team Coordinators and cannot be modified.
+                       </p>
+                    </div>
+
+                    {/* Custom Skills */}
+                    <div>
+                       <div className="flex items-center gap-2 mb-3">
+                          <Award className={`w-4 h-4 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
+                          <h3 className={`text-sm font-semibold uppercase tracking-wide ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`}>
+                             Operator Skills ({skills.filter(s => !TC_SKILLS.includes(s)).length})
+                          </h3>
+                       </div>
+                       <div className="flex flex-wrap gap-2">
+                          {skills.filter(s => !TC_SKILLS.includes(s)).map((skill) => (
+                             <div
+                                key={skill}
+                                className={`group inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                                   theme === 'Midnight'
+                                      ? 'bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600'
+                                      : 'bg-white text-slate-700 border border-gray-200 hover:border-gray-300 shadow-sm'
+                                }`}
+                             >
+                                {editingSkill === skill ? (
+                                   <input
+                                      type="text"
+                                      value={editingSkillName}
+                                      onChange={(e) => setEditingSkillName(e.target.value)}
+                                      className={`w-32 px-2 py-0.5 rounded border outline-none text-sm ${
+                                         theme === 'Midnight'
+                                            ? 'bg-slate-900 border-slate-600 text-white'
+                                            : 'bg-gray-50 border-gray-300 text-slate-900'
+                                      }`}
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                         if (e.key === 'Enter') {
+                                            const trimmed = editingSkillName.trim();
+                                            if (!trimmed) return;
+                                            if (skills.includes(trimmed) && trimmed !== skill) {
+                                               toast.error('Skill name already exists');
+                                               return;
+                                            }
+                                            const updated = skills.map(s => s === skill ? trimmed : s);
+                                            setSkills(updated);
+                                            saveSkills(updated);
+                                            // Update tasks that use this skill
+                                            setTasks(tasks.map(t => t.requiredSkill === skill ? { ...t, requiredSkill: trimmed } : t));
+                                            // Update operators that have this skill
+                                            setOperators(operators.map(op => ({
+                                               ...op,
+                                               skills: op.skills.map(s => s === skill ? trimmed : s)
+                                            })));
+                                            setEditingSkill(null);
+                                            toast.success(`Skill renamed to "${trimmed}"`);
+                                         } else if (e.key === 'Escape') {
+                                            setEditingSkill(null);
+                                         }
+                                      }}
+                                      onBlur={() => setEditingSkill(null)}
+                                   />
+                                ) : (
+                                   <>
+                                      <span>{skill}</span>
+                                      <div className="hidden group-hover:flex items-center gap-1 ml-1">
+                                         <button
+                                            onClick={() => {
+                                               setEditingSkill(skill);
+                                               setEditingSkillName(skill);
+                                            }}
+                                            className={`p-1 rounded transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'hover:bg-slate-700 text-slate-500 hover:text-slate-300'
+                                                  : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
+                                            }`}
+                                            title="Edit skill"
+                                         >
+                                            <Edit2 className="w-3 h-3" />
+                                         </button>
+                                         <button
+                                            onClick={() => setSkillToDelete(skill)}
+                                            className={`p-1 rounded transition-colors ${
+                                               theme === 'Midnight'
+                                                  ? 'hover:bg-red-500/10 text-slate-500 hover:text-red-400'
+                                                  : 'hover:bg-red-50 text-gray-400 hover:text-red-500'
+                                            }`}
+                                            title="Delete skill"
+                                         >
+                                            <Trash2 className="w-3 h-3" />
+                                         </button>
+                                      </div>
+                                   </>
+                                )}
+                             </div>
+                          ))}
+                       </div>
+                    </div>
+                 </div>
+
+                 {/* Info Box */}
+                 <div className={`flex items-start gap-3 p-4 rounded-xl ${
+                    theme === 'Midnight' ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-blue-50 border border-blue-100'
+                 }`}>
+                    <AlertCircle className={`w-5 h-5 shrink-0 ${theme === 'Midnight' ? 'text-blue-400' : 'text-blue-600'}`} />
+                    <div>
+                       <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-blue-300' : 'text-blue-800'}`}>
+                          Skill Dependencies
+                       </p>
+                       <p className={`text-sm mt-1 ${theme === 'Midnight' ? 'text-blue-400/80' : 'text-blue-600'}`}>
+                          Skills are linked to tasks and operators. When you edit a skill name, it will update everywhere. Deleting a skill will remove it from all operators and may affect task assignments.
+                       </p>
+                    </div>
+                 </div>
               </div>
            )}
 
@@ -3919,8 +4208,8 @@ function App() {
                  {/* Header with search and filters */}
                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                       <h2 className={`text-xl font-bold ${styles.text}`}>Skills</h2>
-                       <p className={`text-sm mt-1 ${styles.muted}`}>{tasks.length} skills configured</p>
+                       <h2 className={`text-xl font-bold ${styles.text}`}>Tasks</h2>
+                       <p className={`text-sm mt-1 ${styles.muted}`}>{tasks.length} tasks configured</p>
                     </div>
                     <button
                        onClick={openAddTaskModal}
@@ -3931,7 +4220,7 @@ function App() {
                        }`}
                     >
                        <Plus className="w-4 h-4" />
-                       Add Skill
+                       Add Task
                     </button>
                  </div>
 
@@ -3943,7 +4232,7 @@ function App() {
                        <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${styles.muted}`} />
                        <input
                           type="text"
-                          placeholder="Search skills..."
+                          placeholder="Search tasks..."
                           value={taskSearch}
                           onChange={(e) => setTaskSearch(e.target.value)}
                           className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm outline-none transition-colors ${
@@ -4121,10 +4410,7 @@ function App() {
                                                   </label>
                                                   <select
                                                      value={task.requiredSkill}
-                                                     onChange={(e) => {
-                                                        const newSkill = e.target.value;
-                                                        setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
-                                                     }}
+                                                     onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
                                                      className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
                                                         theme === 'Midnight'
                                                            ? 'bg-slate-900 border-slate-600 text-slate-300'
@@ -4353,10 +4639,7 @@ function App() {
                                                      </label>
                                                      <select
                                                         value={task.requiredSkill}
-                                                        onChange={(e) => {
-                                                           const newSkill = e.target.value;
-                                                           setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: newSkill} : t));
-                                                        }}
+                                                        onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? {...t, requiredSkill: e.target.value} : t))}
                                                         className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
                                                            theme === 'Midnight'
                                                               ? 'bg-slate-900 border-slate-600 text-slate-300'
@@ -4466,7 +4749,7 @@ function App() {
               );
            })()}
 
-           {/* Add Skill Modal */}
+           {/* Add Task Modal */}
            {showAddTaskModal && (
               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAddTaskModal(false)}>
                  <div
@@ -4478,7 +4761,7 @@ function App() {
                     {/* Modal Header */}
                     <div className={`px-6 py-4 border-b ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
                        <div className="flex items-center justify-between">
-                          <h3 className={`text-lg font-bold ${styles.text}`}>Add New Skill</h3>
+                          <h3 className={`text-lg font-bold ${styles.text}`}>Add New Task</h3>
                           <button
                              onClick={() => setShowAddTaskModal(false)}
                              className={`p-1.5 rounded-lg transition-colors ${
@@ -4492,14 +4775,14 @@ function App() {
 
                     {/* Modal Body */}
                     <div className="px-6 py-5 space-y-5">
-                       {/* Skill Name */}
+                       {/* Task Name */}
                        <div>
-                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Skill Name</label>
+                          <label className={`block text-sm font-medium mb-2 ${styles.text}`}>Task Name</label>
                           <input
                              type="text"
                              value={newTaskName}
                              onChange={(e) => setNewTaskName(e.target.value)}
-                             placeholder="Enter skill name..."
+                             placeholder="Enter task name..."
                              autoFocus
                              className={`w-full px-4 py-2.5 rounded-lg border text-sm outline-none transition-colors ${
                                 theme === 'Midnight'
@@ -4624,7 +4907,7 @@ function App() {
                                    : 'bg-blue-600 hover:bg-blue-500 text-white'
                           }`}
                        >
-                          Create Skill
+                          Create Task
                        </button>
                     </div>
                  </div>
@@ -5484,11 +5767,24 @@ function App() {
 
                   {/* Algorithm Selection */}
                   <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
-                     <div className="mb-4">
-                        <h3 className={`font-bold text-base ${styles.text}`}>Scheduling Algorithm</h3>
-                        <p className="text-sm text-gray-500 mt-1">
-                           Choose which optimization algorithm to use when generating schedules.
-                        </p>
+                     <div className="mb-4 flex items-start justify-between">
+                        <div>
+                           <h3 className={`font-bold text-base ${styles.text}`}>Scheduling Algorithm</h3>
+                           <p className="text-sm text-gray-500 mt-1">
+                              Choose which optimization algorithm to use when generating schedules.
+                           </p>
+                        </div>
+                        <button
+                           onClick={() => setShowAlgorithmComparisonModal(true)}
+                           className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                              theme === 'Midnight'
+                                 ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30'
+                                 : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                           }`}
+                        >
+                           <BarChart3 className="w-3.5 h-3.5" />
+                           Compare
+                        </button>
                      </div>
                      <div className="space-y-3">
                         {[
@@ -5517,8 +5813,8 @@ function App() {
                               value: 'max-matching' as const,
                               label: 'Max Matching (V4)',
                               desc: 'GUARANTEES 100% fulfillment when mathematically possible',
-                              badge: '100% Fill',
-                              badgeColor: theme === 'Midnight' ? 'bg-green-500/20 text-green-400' : 'bg-green-100 text-green-600'
+                              badge: '100% Guaranteed',
+                              badgeColor: theme === 'Midnight' ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/40' : 'bg-emerald-600 text-white'
                            }
                         ].map((algo) => (
                            <div
@@ -5577,13 +5873,14 @@ function App() {
                         </div>
                      )}
                      {schedulingRules.algorithm === 'max-matching' && (
-                        <div className={`mt-4 p-3 rounded-lg border ${
+                        <div className={`mt-4 p-3 rounded-lg border flex gap-2 ${
                            theme === 'Midnight'
-                              ? 'bg-green-500/10 border-green-500/30 text-green-300'
-                              : 'bg-green-50 border-green-200 text-green-700'
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
                         }`}>
+                           <Info className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
                            <p className="text-xs font-medium">
-                              💡 Max Matching uses the Hopcroft-Karp algorithm to GUARANTEE 100% task fulfillment when mathematically possible. It prioritizes filling all positions over soft constraints like variety and balance.
+                              This algorithm GUARANTEES all tasks will be filled (100% coverage) when mathematically possible. It uses advanced matching to ensure every position is staffed, even with limited operators.
                            </p>
                         </div>
                      )}
@@ -5764,106 +6061,6 @@ function App() {
                            />
                         </label>
                      </div>
-                  </div>
-
-                  {/* Supabase Migration */}
-                  <div className={`p-6 rounded-2xl border ${theme === 'Midnight' ? 'bg-indigo-950/20 border-indigo-900/50' : 'bg-indigo-50 border-indigo-200'}`}>
-                     <div className="flex items-center gap-3 mb-4">
-                        <div className={`p-2 rounded-lg ${theme === 'Midnight' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-indigo-100 text-indigo-600'}`}>
-                           <Cloud className="h-5 w-5" />
-                        </div>
-                        <div>
-                           <h3 className={`font-bold ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-700'}`}>Migrate to Supabase</h3>
-                           <p className={`text-xs ${theme === 'Midnight' ? 'text-indigo-400/70' : 'text-indigo-600/70'}`}>One-time cloud migration</p>
-                        </div>
-                     </div>
-                     <p className={`text-sm mb-4 ${theme === 'Midnight' ? 'text-indigo-400/80' : 'text-indigo-600/80'}`}>
-                        Move your existing data from browser storage to Supabase for cross-device sync. This is a one-time operation that copies all operators, tasks, schedules, and settings to the cloud.
-                     </p>
-                     <div className={`mb-4 p-3 rounded-lg ${theme === 'Midnight' ? 'bg-slate-800 border border-slate-700' : 'bg-blue-50 border border-blue-200'}`}>
-                        <p className={`text-xs ${theme === 'Midnight' ? 'text-slate-300' : 'text-slate-700'}`}>
-                           <strong>Note:</strong> After successful migration, the app will continue using IndexedDB. To switch to Supabase storage, contact your administrator.
-                        </p>
-                     </div>
-                     <button
-                        onClick={async () => {
-                           if (!confirm('Are you sure you want to migrate your data to Supabase? This will copy all your local data to the cloud.')) {
-                              return;
-                           }
-
-                           setIsMigrating(true);
-                           try {
-                              const { migrateToSupabase } = await import('./scripts/migrateToSupabase');
-                              const results = await migrateToSupabase();
-
-                              setMigrationResults(results);
-
-                              const totalSuccess = results.reduce((sum, r) => sum + r.success, 0);
-                              const totalFailed = results.reduce((sum, r) => sum + r.failed, 0);
-
-                              if (totalFailed === 0) {
-                                 addToast('success', `Migration complete! ${totalSuccess} items migrated successfully.`);
-                              } else {
-                                 addToast('warning', `Migration completed with ${totalFailed} errors. ${totalSuccess} items migrated.`);
-                              }
-                           } catch (err: any) {
-                              console.error('Migration failed:', err);
-                              addToast('error', `Migration failed: ${err.message}`);
-                           } finally {
-                              setIsMigrating(false);
-                           }
-                        }}
-                        disabled={isMigrating}
-                        className={`py-3 px-6 rounded-xl text-sm font-bold transition-colors ${
-                           isMigrating
-                              ? 'bg-gray-400 cursor-not-allowed text-white'
-                              : theme === 'Midnight'
-                              ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                              : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                        }`}
-                     >
-                        {isMigrating ? (
-                           <>
-                              <Loader2 className="inline-block h-4 w-4 mr-2 animate-spin" />
-                              Migrating...
-                           </>
-                        ) : (
-                           <>
-                              <Cloud className="inline-block h-4 w-4 mr-2" />
-                              Migrate to Supabase
-                           </>
-                        )}
-                     </button>
-
-                     {/* Migration Results */}
-                     {migrationResults && migrationResults.length > 0 && (
-                        <div className={`mt-6 p-4 rounded-lg ${theme === 'Midnight' ? 'bg-slate-900' : 'bg-white'} border ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
-                           <h4 className={`text-sm font-bold mb-3 ${styles.text}`}>Migration Results</h4>
-                           <div className="space-y-2">
-                              {migrationResults.map((result) => (
-                                 <div key={result.entity} className="text-sm">
-                                    <div className="flex justify-between items-center">
-                                       <span className={`font-medium ${styles.text}`}>{result.entity}</span>
-                                       <div className="flex gap-3 text-xs">
-                                          <span className="text-emerald-500">✓ {result.success}</span>
-                                          {result.failed > 0 && <span className="text-red-500">✗ {result.failed}</span>}
-                                       </div>
-                                    </div>
-                                    {result.errors.length > 0 && (
-                                       <ul className={`mt-1 ml-4 text-xs space-y-1 ${theme === 'Midnight' ? 'text-red-400' : 'text-red-600'}`}>
-                                          {result.errors.slice(0, 3).map((err, idx) => (
-                                             <li key={idx}>• {err}</li>
-                                          ))}
-                                          {result.errors.length > 3 && (
-                                             <li>• ... and {result.errors.length - 3} more errors</li>
-                                          )}
-                                       </ul>
-                                    )}
-                                 </div>
-                              ))}
-                           </div>
-                        </div>
-                     )}
                   </div>
 
                   {/* Danger Zone */}
@@ -6535,8 +6732,8 @@ function App() {
 
                                {/* Available Tasks - operator has the skill */}
                                {(() => {
-                                 const availableTasks = tasks.filter(t => !t.isCoordinatorOnly && op.skills.includes(t.requiredSkill));
-                                 const unavailableTasks = tasks.filter(t => !t.isCoordinatorOnly && !op.skills.includes(t.requiredSkill));
+                                 const availableTasks = tasks.filter(t => op.skills.includes(t.requiredSkill));
+                                 const unavailableTasks = tasks.filter(t => !op.skills.includes(t.requiredSkill));
 
                                  return (
                                    <>
@@ -6901,7 +7098,7 @@ function App() {
                                </button>
 
                                {/* Only show tasks matching Flex skills */}
-                               {tasks.filter(t => !t.isCoordinatorOnly && op.skills.includes(t.requiredSkill)).map(flexTask => (
+                               {tasks.filter(t => op.skills.includes(t.requiredSkill)).map(flexTask => (
                                  <button
                                    key={flexTask.id}
                                    onClick={() => handleAssignmentChange(dayIdx, op.id, flexTask.id)}
@@ -7126,8 +7323,8 @@ function App() {
                                  Unassigned
                                </button>
 
-                               {/* Only show coordinator tasks (Process, People, Off process) */}
-                               {tasks.filter(t => t.isCoordinatorOnly && op.skills.includes(t.requiredSkill)).map(coordTask => (
+                               {/* Only show coordinator tasks (Process, People, Off process, Process/AD) */}
+                               {tasks.filter(t => op.skills.includes(t.requiredSkill)).map(coordTask => (
                                  <button
                                    key={coordTask.id}
                                    onClick={() => handleAssignmentChange(dayIdx, op.id, coordTask.id)}
@@ -7357,7 +7554,7 @@ function App() {
   );
 
   // --- Auth Checking Screen ---
-  if (authLoading || authChecking) {
+  if (authChecking) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="flex flex-col items-center gap-4">
@@ -7368,9 +7565,14 @@ function App() {
     );
   }
 
+  // --- Setup Screen (First Run) ---
+  if (needsSetup) {
+    return <SetupPage onComplete={handleSetupComplete} onSwitchToLogin={() => setNeedsSetup(false)} />;
+  }
+
   // --- Login Screen (Not Authenticated) ---
-  if (!isAuthenticated) {
-    return <LoginPage />;
+  if (!currentUser) {
+    return <LoginPage onLogin={handleLogin} onSwitchToSetup={() => setNeedsSetup(true)} />;
   }
 
   // --- Loading Screen ---
@@ -7452,6 +7654,8 @@ function App() {
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}
           onOpenFeedback={() => setShowFeedbackModal(true)}
+          user={currentUser}
+          onSignOut={handleSignOut}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
@@ -7669,6 +7873,157 @@ function App() {
               >
                 <Send className="h-4 w-4" />
                 Publish Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Algorithm Comparison Modal */}
+      {showAlgorithmComparisonModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowAlgorithmComparisonModal(false)} />
+          <div className={`relative w-full max-w-5xl rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h3 className={`text-2xl font-bold ${styles.text}`}>Algorithm Comparison</h3>
+                <p className={`text-sm mt-1 ${styles.muted}`}>
+                  Compare scheduling algorithms to choose the best fit for your team's needs.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAlgorithmComparisonModal(false)}
+                className={`p-2 rounded-lg transition-colors ${
+                  theme === 'Midnight'
+                    ? 'hover:bg-slate-800 text-slate-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+                }`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Comparison Table */}
+            <div className={`rounded-xl border overflow-hidden ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+              <table className="w-full">
+                <thead className={theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'}>
+                  <tr>
+                    <th className={`px-4 py-3 text-left text-sm font-semibold ${styles.text}`}>Feature</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V1: Standard</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V2: Enhanced</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V3: Multi-Objective</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V4: Max Matching</th>
+                  </tr>
+                </thead>
+                <tbody className={`divide-y ${theme === 'Midnight' ? 'divide-slate-700' : 'divide-gray-200'}`}>
+                  {/* Success Rate */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Success Rate (100% Fill)</td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                      }`}>~2%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                      }`}>~15%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'
+                      }`}>~70%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-600 text-white'
+                      }`}>100%</span>
+                    </td>
+                  </tr>
+
+                  {/* Speed */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Speed</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Fastest</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Very Fast</td>
+                    <td className="px-4 py-3 text-center text-sm text-amber-500">⏱️ Moderate</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Fast</td>
+                  </tr>
+
+                  {/* Task Variety */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Task Variety</td>
+                    <td className="px-4 py-3 text-center text-sm">Low (1.4)</td>
+                    <td className="px-4 py-3 text-center text-sm">Medium (1.8)</td>
+                    <td className="px-4 py-3 text-center text-sm">Good (2.2)</td>
+                    <td className="px-4 py-3 text-center text-sm">Best (2.4)</td>
+                  </tr>
+
+                  {/* Workload Balance */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Workload Balance</td>
+                    <td className="px-4 py-3 text-center text-sm">Good</td>
+                    <td className="px-4 py-3 text-center text-sm">Good</td>
+                    <td className="px-4 py-3 text-center text-sm">Better</td>
+                    <td className="px-4 py-3 text-center text-sm">Best</td>
+                  </tr>
+
+                  {/* Scarce Skills Handling */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Handles Scarce Skills</td>
+                    <td className="px-4 py-3 text-center text-sm text-red-500">❌ Poor</td>
+                    <td className="px-4 py-3 text-center text-sm text-amber-500">⚠️ Fair</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">✅ Good</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">✅ Excellent</td>
+                  </tr>
+
+                  {/* Best For */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Best For</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Quick schedules with flexibility</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Balanced schedules with variety</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Exploring multiple options</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Critical weeks requiring 100% coverage</td>
+                  </tr>
+
+                  {/* Recommendations */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Recommended When</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>All operators available, no constraints</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Need better variety than Standard</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Want to compare trade-offs</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>High absences, scarce skills, critical operations</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Help Text */}
+            <div className={`mt-6 p-4 rounded-xl ${theme === 'Midnight' ? 'bg-indigo-500/10 border border-indigo-500/30' : 'bg-indigo-50 border border-indigo-200'}`}>
+              <div className="flex gap-3">
+                <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-600'}`} aria-hidden="true" />
+                <div>
+                  <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-indigo-300' : 'text-indigo-900'}`}>
+                    Need help choosing?
+                  </p>
+                  <p className={`text-sm mt-1 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-700'}`}>
+                    <strong>Start with V4 (Max Matching)</strong> if you need guaranteed coverage. Fall back to V1 (Standard) for simple weeks with all operators available.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setShowAlgorithmComparisonModal(false)}
+                className={`px-6 py-2.5 rounded-xl font-semibold transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+              >
+                Got it
               </button>
             </div>
           </div>
@@ -8550,20 +8905,6 @@ function App() {
               Are you sure you want to delete <span className="font-semibold" style={{ color: taskToDelete.color }}>{taskToDelete.name}</span>? This action cannot be undone.
             </p>
 
-            {/* Show warning if operators have this task's skill */}
-            {(() => {
-              const affectedOps = operators.filter(op => op.skills.includes(taskToDelete.requiredSkill));
-              return affectedOps.length > 0 && (
-                <div className={`p-3 rounded-lg mb-4 ${theme === 'Midnight' ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-amber-50 border border-amber-200'}`}>
-                  <p className={`text-sm ${theme === 'Midnight' ? 'text-amber-400' : 'text-amber-700'}`}>
-                    <AlertTriangle className="inline-block w-4 h-4 mr-1" />
-                    {affectedOps.length} operator{affectedOps.length !== 1 ? 's have' : ' has'} the "{taskToDelete.requiredSkill}" skill.
-                    The skill will remain in the Skills Library.
-                  </p>
-                </div>
-              );
-            })()}
-
             <div className="flex gap-3">
               <button
                 onClick={() => setTaskToDelete(null)}
@@ -8670,6 +9011,10 @@ function App() {
                 </button>
                 <button
                   onClick={() => {
+                    // Remove skill from skills list
+                    const updated = skills.filter(s => s !== skillToDelete);
+                    setSkills(updated);
+                    saveSkills(updated);
                     // Remove skill from all operators
                     setOperators(operators.map(op => ({
                       ...op,
