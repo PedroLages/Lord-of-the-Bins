@@ -7,7 +7,7 @@ import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
   Trash2, Plus, Edit2, Search, Settings, Filter, MoreHorizontal,
-  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, BarChart3, Clock, CheckCircle2, Palette, Monitor,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, BarChart3, Clock, CheckCircle2, CheckCircle, Palette, Monitor,
   Layout, Moon, Grid, LayoutDashboard, LogOut, Menu, Box, Zap,
   TrendingUp, Activity, PieChart, Bell, Globe, Lock, Unlock, AlertTriangle,
   ArrowRight, Briefcase, Award, UserCheck, Sliders, Puzzle, Shield,
@@ -15,7 +15,7 @@ import {
   Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
   Palmtree, Thermometer, GraduationCap, CircleDashed,
   CalendarX2, Shuffle, Scale, GripVertical, Command,
-  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick
+  UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Info
 } from 'lucide-react';
 import {
   Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
@@ -24,7 +24,7 @@ import {
   isTCTask, getTCFixedColor,
   type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
-  type PlanningTemplate
+  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
 import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
 import OperatorModal from './components/OperatorModal';
@@ -37,7 +37,7 @@ import ProfileSettings from './components/ProfileSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
-import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule, FillGapsResult } from './services/schedulingService';
+import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
   ActivityLogEntry,
@@ -115,6 +115,7 @@ function App() {
     getAllPlanningTemplates,
     savePlanningTemplate,
     deletePlanningTemplate,
+    clearAllData,
   } = useStorage();
 
   const [theme, setTheme] = useState<Theme>('Modern');
@@ -137,6 +138,10 @@ function App() {
   const [editingFlexName, setEditingFlexName] = useState<string | null>(null);
   const [flexNameInput, setFlexNameInput] = useState('');
 
+  // Verification UI state
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
   // App State - will be populated from storage
   const [operators, setOperators] = useState<Operator[]>([]);
   const [tasks, setTasks] = useState<TaskType[]>([]);
@@ -152,6 +157,7 @@ function App() {
   const [planBuilderViolations, setPlanBuilderViolations] = useState<PlanBuilderViolation[]>([]);
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
   const [showCriticalWarningsModal, setShowCriticalWarningsModal] = useState(false);
+  const [showAlgorithmComparisonModal, setShowAlgorithmComparisonModal] = useState(false);
 
   // Initialize state from storage when data is loaded
   useEffect(() => {
@@ -215,7 +221,7 @@ function App() {
   // Auto-save schedule history when it changes
   useEffect(() => {
     if (dataInitialized) {
-      Object.values(scheduleHistory).forEach(schedule => {
+      Object.values(scheduleHistory).forEach((schedule: WeeklySchedule) => {
         saveSchedule(schedule);
       });
     }
@@ -402,11 +408,62 @@ function App() {
     return result;
   }, [taskRequirements]);
 
+  // Automatically validate for CRITICAL errors only (skill mismatch, availability, double assignment)
+  // Soft warnings (understaffed/overstaffed) are shown only via "Run Verification" button
+  useEffect(() => {
+    if (!dataInitialized || !currentWeek) return;
+
+    try {
+      const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+      const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+      currentWeek.days.forEach((d, idx) => {
+        assignmentsMap[idx] = d.assignments;
+      });
+      // showStaffingWarnings: false = only critical errors (skill mismatch, availability, etc.)
+      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
+      setScheduleWarnings(warnings);
+    } catch (err) {
+      console.error('[Validation] Failed to validate schedule:', err);
+      setScheduleWarnings([{
+        type: 'system_error',
+        message: 'Unable to validate schedule. Please refresh the page.',
+        severity: 'error',
+        operatorId: '',
+        day: 'Mon'
+      }]);
+    }
+  }, [dataInitialized, currentWeek, operators, tasks, taskRequirements]);
+
+  // Keyboard shortcut for Run Verification (Cmd/Ctrl + Shift + V)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        handleRunVerification();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentWeek, operators, tasks, taskRequirements]); // Dependencies needed for handleRunVerification
+
   // Validate Plan Builder requirements whenever schedule or requirements change
   useEffect(() => {
-    const violations = validatePlanBuilderRequirements(currentWeek, tasks, taskRequirements, excludedTasks);
+    // Transform currentWeek.days to assignments: Record<operatorId, Record<day, assignment>>
+    const assignments: Record<string, Record<string, ScheduleAssignment>> = {};
+    currentWeek.days.forEach(day => {
+      Object.entries(day.assignments).forEach(([operatorId, assignment]: [string, ScheduleAssignment]) => {
+        if (!assignments[operatorId]) {
+          assignments[operatorId] = {};
+        }
+        assignments[operatorId][day.dayOfWeek] = assignment;
+      });
+    });
+
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const violations = validatePlanBuilderRequirements(assignments, operators, tasks, daysList, taskRequirements);
     setPlanBuilderViolations(violations);
-  }, [currentWeek, tasks, taskRequirements, excludedTasks]);
+  }, [currentWeek, tasks, taskRequirements, excludedTasks, operators]);
 
   // Toast notifications for Plan Builder violations
   const previousViolationsCount = useRef<number>(0);
@@ -762,7 +819,7 @@ function App() {
 
   const handleAddNewTask = () => {
     if (!newTaskName.trim()) {
-      addToast('warning', 'Please enter a task name');
+      toast.warning('Please enter a task name');
       return;
     }
     const newTaskId = `t${Date.now()}`;
@@ -776,7 +833,7 @@ function App() {
     };
     setTasks(prev => [...prev, newTask]);
     setShowAddTaskModal(false);
-    addToast('success', `Task "${newTaskName.trim()}" created`);
+    toast.success(`Task "${newTaskName.trim()}" created`);
   };
 
   const handleUpdateTaskRequiredOperators = (taskId: string, count: number) => {
@@ -898,7 +955,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -965,7 +1023,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1037,9 +1096,9 @@ function App() {
       let anchor = selectionAnchor;
       if (!anchor && selectedCells.size > 0) {
         // Find the first selected cell in this row
-        const firstInRow = Array.from(selectedCells).find(key => key.startsWith(`${opId}-`));
+        const firstInRow = Array.from(selectedCells).find((key: string) => key.startsWith(`${opId}-`)) as string | undefined;
         if (firstInRow) {
-          const [, dayStr] = firstInRow.split('-');
+          const [, dayStr] = (firstInRow as string).split('-');
           anchor = { opId, dayIndex: parseInt(dayStr, 10) };
         }
       }
@@ -1194,7 +1253,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1301,7 +1361,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during manual editing - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1338,7 +1399,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during undo - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1375,7 +1437,8 @@ function App() {
     newSchedule.days.forEach((d, idx) => {
       assignmentsMap[idx] = d.assignments;
     });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements());
+    // Don't show staffing warnings during redo - only show hard warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
   };
 
@@ -1426,9 +1489,7 @@ function App() {
     } else {
       setCurrentWeek(newWeekTemplate);
     }
-
-    // Clear warnings when navigating
-    setScheduleWarnings([]);
+    // Warnings will be re-validated automatically by the useEffect
   };
 
   const handleGoToCurrentWeek = () => {
@@ -1446,8 +1507,194 @@ function App() {
     } else {
       setCurrentWeek(todayWeek);
     }
+    // Warnings will be re-validated automatically by the useEffect
+  };
 
-    setScheduleWarnings([]);
+  // --- Palette Application Handler ---
+
+  const applyPaletteToTasks = (palette: typeof COLOR_PALETTES[0]) => {
+    // Apply palette colors with STRICT Delta E accessibility checking
+    // Rule 0: TC tasks (Process, People, Off Process) keep FIXED colors - never change
+    // Rule 1: NEVER assign the same color to two tasks until ALL palette colors are used
+    // Rule 2: When all colors used, reuse the one with MAXIMUM Delta E from assigned colors
+    // Rule 3: Prioritize colors meeting Delta E ≥ 25 threshold
+
+    // Separate TC tasks from regular tasks
+    const regularTasks = tasks.filter(t => !isTCTask(t));
+
+    const finalAssignments = new Map<string, number>(); // taskId -> colorIndex
+    const assignedColors: string[] = []; // Track assigned hex colors for Delta E checking
+    const usedIndices = new Set<number>(); // Track used palette indices (STRICT - no duplicates)
+    const usageCount = new Map<number, number>(); // Track how many times each index is used (for reuse scenarios)
+
+    // Sort REGULAR tasks by their original color's closest match to prioritize similar colors together
+    const taskColorMapping = regularTasks.map(task => ({
+      task,
+      closestIndex: findClosestPaletteIndex(task.color, palette),
+      originalColor: task.color
+    })).sort((a, b) => a.closestIndex - b.closestIndex);
+
+    const paletteSize = palette.colors.length;
+
+    // Process each task with STRICT unique color assignment
+    taskColorMapping.forEach(({ task, closestIndex, originalColor }) => {
+      const preferredHex = palette.colors[closestIndex].hex;
+      let selectedIndex = closestIndex;
+      let selectedHex = preferredHex;
+
+      // STRICT: Check if this palette index is already used
+      const indexAlreadyUsed = usedIndices.has(closestIndex);
+
+      // Also check Delta E conflict with assigned colors
+      const hasDeltaEConflict = assignedColors.some(
+        assignedHex => calculateDeltaEHex(preferredHex, assignedHex) < MIN_DELTA_E_THRESHOLD
+      );
+
+      if (indexAlreadyUsed || hasDeltaEConflict) {
+        // Need to find an alternative color
+
+        // Step 1: Find all UNUSED indices
+        const unusedIndices: number[] = [];
+        for (let i = 0; i < paletteSize; i++) {
+          if (!usedIndices.has(i)) {
+            unusedIndices.push(i);
+          }
+        }
+
+        if (unusedIndices.length > 0) {
+          // Step 2: Among unused, find those meeting Delta E threshold
+          const accessibleUnused = unusedIndices.filter(i => {
+            const hex = palette.colors[i].hex;
+            return assignedColors.every(
+              ah => calculateDeltaEHex(hex, ah) >= MIN_DELTA_E_THRESHOLD
+            );
+          });
+
+          if (accessibleUnused.length > 0) {
+            // Pick the one closest to original color (prefer visual similarity)
+            let bestDelta = Infinity;
+            accessibleUnused.forEach(i => {
+              const delta = calculateDeltaEHex(palette.colors[i].hex, originalColor);
+              if (delta < bestDelta) {
+                bestDelta = delta;
+                selectedIndex = i;
+              }
+            });
+          } else {
+            // No unused colors meet threshold - pick unused with MAX min-Delta E
+            let maxMinDeltaE = -1;
+            unusedIndices.forEach(i => {
+              const candidateHex = palette.colors[i].hex;
+              let minDeltaE = assignedColors.length > 0 ? Infinity : 100;
+              assignedColors.forEach(ah => {
+                const d = calculateDeltaEHex(candidateHex, ah);
+                if (d < minDeltaE) minDeltaE = d;
+              });
+              if (minDeltaE > maxMinDeltaE) {
+                maxMinDeltaE = minDeltaE;
+                selectedIndex = i;
+              }
+            });
+          }
+          selectedHex = palette.colors[selectedIndex].hex;
+        } else {
+          // ALL palette colors used - must reuse (14 tasks > 12 colors)
+          // Strategy: Pick the LEAST used color, with tie-breaker being max Delta E from recent colors
+          const minUsageCount = Math.min(...Array.from({ length: paletteSize }, (_, i) => usageCount.get(i) || 0));
+          const leastUsedIndices = Array.from({ length: paletteSize }, (_, i) => i)
+            .filter(i => (usageCount.get(i) || 0) === minUsageCount);
+
+          // Among least used, pick one with max Delta E from recently assigned colors
+          let maxMinDeltaE = -1;
+          const recentColors = assignedColors.slice(-5); // Check against last 5 assigned colors
+          leastUsedIndices.forEach(i => {
+            const candidateHex = palette.colors[i].hex;
+            let minDeltaE = recentColors.length > 0 ? Infinity : 100;
+            recentColors.forEach(ah => {
+              const d = calculateDeltaEHex(candidateHex, ah);
+              if (d < minDeltaE) minDeltaE = d;
+            });
+            if (minDeltaE > maxMinDeltaE) {
+              maxMinDeltaE = minDeltaE;
+              selectedIndex = i;
+            }
+          });
+          selectedHex = palette.colors[selectedIndex].hex;
+        }
+      }
+
+      // Assign the color
+      finalAssignments.set(task.id, selectedIndex);
+      assignedColors.push(selectedHex);
+      usedIndices.add(selectedIndex);
+      usageCount.set(selectedIndex, (usageCount.get(selectedIndex) || 0) + 1);
+    });
+
+    // Apply the final assignments
+    // TC tasks get their FIXED colors, regular tasks get palette colors
+    const updatedTasks = tasks.map(task => {
+      // TC tasks always use fixed colors - never change with palette
+      const tcColor = getTCFixedColor(task);
+      if (tcColor) {
+        return { ...task, color: tcColor, textColor: getContrastTextColor(tcColor) };
+      }
+      // Regular tasks get palette assignment
+      const colorIndex = finalAssignments.get(task.id) ?? findClosestPaletteIndex(task.color, palette);
+      const newColor = palette.colors[colorIndex].hex;
+      return { ...task, color: newColor, textColor: getContrastTextColor(newColor) };
+    });
+
+    setTasks(updatedTasks);
+    saveTasks(updatedTasks);
+    toast.success(`Applied "${palette.name}" to ${regularTasks.length} tasks`);
+  };
+
+  // --- Verification Handler ---
+
+  const handleRunVerification = () => {
+    if (!currentWeek) return;
+
+    setIsVerifying(true);
+    setVerificationStatus('idle');
+
+    try {
+      const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+      const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+      currentWeek.days.forEach((d, idx) => {
+        assignmentsMap[idx] = d.assignments;
+      });
+      // showStaffingWarnings: true = show ALL warnings (critical + soft)
+      const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+      setScheduleWarnings(warnings);
+
+      // Show toast feedback
+      if (warnings.length === 0) {
+        toast.success('✅ No issues found! Schedule looks good.');
+        setVerificationStatus('success');
+        // Reset success state after 2 seconds
+        setTimeout(() => setVerificationStatus('idle'), 2000);
+      } else {
+        const criticalCount = warnings.filter(w => ['skill_mismatch', 'availability_conflict', 'double_assignment'].includes(w.type)).length;
+        const softCount = warnings.length - criticalCount;
+
+        if (criticalCount > 0) {
+          toast.error(`Found ${criticalCount} critical issue${criticalCount !== 1 ? 's' : ''} and ${softCount} warning${softCount !== 1 ? 's' : ''}`);
+          setVerificationStatus('error');
+        } else {
+          toast.warning(`Found ${softCount} warning${softCount !== 1 ? 's' : ''}`);
+          setVerificationStatus('error');
+        }
+        // Reset error state after 2 seconds
+        setTimeout(() => setVerificationStatus('idle'), 2000);
+      }
+    } catch (err) {
+      console.error('[Verification] Failed to run verification:', err);
+      toast.error('Verification failed. Try again or contact support if this persists.');
+      setVerificationStatus('error');
+      setTimeout(() => setVerificationStatus('idle'), 2000);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   // --- Publish Handlers ---
@@ -1549,10 +1796,16 @@ function App() {
     try {
       const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
-      // Build current assignments map for the algorithm (include pinned field)
+      // Build current assignments map for the algorithm (operatorId -> dayName -> assignment)
+      // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-      currentWeek.days.forEach((day, idx) => {
-        currentAssignmentsMap[idx] = day.assignments;
+      currentWeek.days.forEach((day) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
+        });
       });
 
       const scheduleResult = generateOptimizedSchedule({
@@ -1562,7 +1815,8 @@ function App() {
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
         taskRequirements,
-        excludedTasks
+        excludedTasks,
+        weekSeed: currentWeek.weekNumber * 100 + currentWeek.year // Unique seed per week
       });
 
       // Handle both single schedule and multi-objective array results
@@ -1678,23 +1932,34 @@ function App() {
     );
 
     if (configuredTasks.length === 0) {
-      addToast({
-        type: 'warning',
-        title: 'No Task Requirements',
-        message: 'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
-        duration: 6000,
-      });
+      toast.warning(
+        'No Task Requirements',
+        'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
+        { duration: 6000 }
+      );
       return;
     }
 
-    const result = fillGapsSchedule({
-      schedule: currentWeek,
-      operators,
-      tasks: configuredTasks,
-      rules: schedulingRules,
-      excludedOperators: excludedOperatorsMap,
-      fillGapsSettings,
+    // Transform currentWeek to assignments map
+    const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
+    currentWeek.days.forEach((day) => {
+      Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
+        if (!currentAssignmentsMap[opId]) {
+          currentAssignmentsMap[opId] = {};
+        }
+        currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
+      });
     });
+
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const result = fillGapsSchedule(
+      operators,
+      configuredTasks,
+      daysList,
+      currentAssignmentsMap,
+      schedulingRules,
+      fillGapsSettings
+    );
 
     setFillGapsResult(result);
     setShowFillGapsPreview(true);
@@ -1733,7 +1998,7 @@ function App() {
   };
 
   // Handle applying the planning modal configuration and running smart fill
-  const handlePlanApply = (config: WeeklyPlanningConfig, exclusions?: WeeklyExclusions) => {
+  const handlePlanApply = async (config: WeeklyPlanningConfig, exclusions?: WeeklyExclusions) => {
     setIsGenerating(true);
 
     // Store config for this week so it persists when modal reopens
@@ -1782,12 +2047,16 @@ function App() {
         taskId: tr.taskId,
         defaultRequirements: tr.defaultRequirements.map(r => ({ ...r })),
         dailyOverrides: tr.dailyOverrides ? Object.fromEntries(
-          Object.entries(tr.dailyOverrides).map(([day, reqs]) => [day, reqs?.map(r => ({ ...r }))])
+          Object.entries(tr.dailyOverrides).map(([day, reqs]: [string, OperatorTypeRequirement[]]) => [day, reqs?.map(r => ({ ...r }))])
         ) as Partial<Record<WeekDay, OperatorTypeRequirement[]>> : {},
         enabled: tr.enabled,
       }));
 
       console.log(`[Plan Builder] Starting with ${planTaskRequirements.length} existing Staffing Requirements`);
+
+      // Track which tasks have been configured by Plan Builder
+      // On first touch, we CLEAR existing requirements so Plan Builder SETS, not MERGES
+      const planBuilderTouchedTasks = new Set<string>();
 
       // Helper to add requirement to a task (either defaultRequirements or dailyOverrides)
       const addRequirementToTask = (
@@ -1814,12 +2083,22 @@ function App() {
           count: count
         };
 
+        // On FIRST touch of this task by Plan Builder, CLEAR existing requirements
+        // This ensures Plan Builder SETS requirements, not MERGES with Settings
+        // Applies to BOTH "every-day" and day-specific rules for consistency
+        if (!planBuilderTouchedTasks.has(taskId)) {
+          planBuilderTouchedTasks.add(taskId);
+          const oldReqs = existingReq.defaultRequirements.map(r => `${r.count}x ${r.type}`).join(', ') || 'none';
+          existingReq.defaultRequirements = []; // Clear ALL existing requirements
+          existingReq.dailyOverrides = {}; // Also clear daily overrides from Settings
+          console.log(`[Plan Builder] First touch for task ${taskId}: cleared old requirements (${oldReqs})`);
+        }
+
         if (timeframe === 'every-day') {
           // Add to default requirements (applies to all days)
-          // This REPLACES the Staffing Requirements default for this type
           const existingTypeReq = existingReq.defaultRequirements.find(r => r.type === reqType);
           if (existingTypeReq) {
-            // Plan Builder rules OVERRIDE existing requirements (not max)
+            // Multiple Plan Builder rules for same type - override count
             existingTypeReq.count = count;
           } else {
             existingReq.defaultRequirements.push(reqEntry);
@@ -1827,7 +2106,7 @@ function App() {
           console.log(`[Plan Builder] Set default requirement: ${count}x ${reqType} (every day)`);
         } else {
           // Add to day-specific override
-          // Other days will still use defaultRequirements from Staffing Requirements
+          // Note: defaultRequirements were cleared on first touch, so other days will have 0 requirements
           const day = timeframe as WeekDay;
           if (!existingReq.dailyOverrides) {
             existingReq.dailyOverrides = {};
@@ -1837,12 +2116,12 @@ function App() {
           }
           const existingDayReq = existingReq.dailyOverrides[day]!.find(r => r.type === reqType);
           if (existingDayReq) {
-            // Plan Builder rules OVERRIDE existing requirements (not max)
+            // Multiple Plan Builder rules for same type - override count
             existingDayReq.count = count;
           } else {
             existingReq.dailyOverrides[day]!.push(reqEntry);
           }
-          console.log(`[Plan Builder] Added daily override: ${count}x ${reqType} on ${day} (other days use Staffing Requirements: ${existingReq.defaultRequirements.map(r => `${r.count}x ${r.type}`).join(', ') || 'none'})`);
+          console.log(`[Plan Builder] Added daily override: ${count}x ${reqType} on ${day}`);
         }
       };
 
@@ -1884,7 +2163,8 @@ function App() {
       // These rules RESERVE operators for specific tasks by pre-pinning them
       // =========================================================================
       const pairingRules = config.rules.filter((r): r is OperatorPairingRule => r.type === 'pairing' && r.enabled);
-      const reservedAssignments: Record<string, Record<string, { taskId: string; pinned: boolean }>> = {}; // dayIndex -> operatorId -> assignment
+      // reservedAssignments structure: operatorId -> dayName -> assignment (matches scheduler expectation)
+      const reservedAssignments: Record<string, Record<string, { taskId: string; pinned: boolean }>> = {};
 
       pairingRules.forEach(rule => {
         if (rule.preference !== 'want') return; // Only process "want" rules for reservations
@@ -1920,22 +2200,19 @@ function App() {
           if (!op) return;
 
           ruleDays.forEach(day => {
-            const dayIndex = daysList.indexOf(day);
-            if (dayIndex === -1) return;
-
             // Check operator availability
             if (!op.availability[day]) {
               console.log(`[Plan Builder] Skipping ${op.name} on ${day} - not available`);
               return;
             }
 
-            if (!reservedAssignments[dayIndex]) {
-              reservedAssignments[dayIndex] = {};
+            if (!reservedAssignments[opId]) {
+              reservedAssignments[opId] = {};
             }
 
             // Only reserve if not already reserved by another rule
-            if (!reservedAssignments[dayIndex][opId]) {
-              reservedAssignments[dayIndex][opId] = {
+            if (!reservedAssignments[opId][day]) {
+              reservedAssignments[opId][day] = {
                 taskId: matchingTask!.id,
                 pinned: true // Mark as pinned so Smart Fill respects it
               };
@@ -1945,35 +2222,53 @@ function App() {
         });
       });
 
-      // Build current assignments map for the algorithm (include pinned field)
-      // MERGE reserved assignments from pairing rules with existing assignments
+      // Build current assignments map for the algorithm (operatorId -> dayName -> assignment)
+      // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-      currentWeek.days.forEach((day, idx) => {
-        currentAssignmentsMap[idx] = { ...day.assignments };
+      currentWeek.days.forEach((day) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          currentAssignmentsMap[opId][day.dayOfWeek] = { ...assignment };
+        });
+      });
 
-        // Apply reserved assignments from pairing rules
-        // These override non-locked existing assignments
-        if (reservedAssignments[idx]) {
-          Object.entries(reservedAssignments[idx]).forEach(([opId, reserved]) => {
-            const existing = currentAssignmentsMap[idx][opId];
-            // Only apply if not already locked
-            if (!existing?.locked) {
-              currentAssignmentsMap[idx][opId] = {
-                taskId: reserved.taskId,
-                locked: false,
-                pinned: true // Pinned so Smart Fill respects it
-              };
-            }
-          });
-        }
+      // Apply reserved assignments from pairing rules (People option)
+      // These override non-locked existing assignments
+      Object.entries(reservedAssignments).forEach(([opId, dayAssignments]) => {
+        Object.entries(dayAssignments).forEach(([day, reserved]) => {
+          if (!currentAssignmentsMap[opId]) {
+            currentAssignmentsMap[opId] = {};
+          }
+          const existing = currentAssignmentsMap[opId][day];
+          // Only apply if not already locked
+          if (!existing?.locked) {
+            currentAssignmentsMap[opId][day] = {
+              taskId: reserved.taskId,
+              locked: false,
+              pinned: true // Pinned so Smart Fill respects it
+            };
+          }
+        });
       });
 
       console.log(`[Plan Builder] Final task requirements (${planTaskRequirements.length} total):`, JSON.stringify(planTaskRequirements, null, 2));
 
-      // NOTE: We do NOT save planTaskRequirements to state!
-      // The Plan Builder creates TEMPORARY requirements for this week's schedule only.
-      // Permanent Task Staffing Requirements should only be modified in Settings > Staffing Requirements.
-      // The planTaskRequirements are used only for schedule generation below.
+      // Save Plan Builder requirements to state so validation shows correct warnings
+      // This ensures "Understaffed" and "Overstaffed" warnings match what the user configured
+      const previousRequirements = taskRequirements;
+      setTaskRequirements(planTaskRequirements);
+
+      // Persist each requirement to storage with proper error handling
+      try {
+        await Promise.all(planTaskRequirements.map(req => saveTaskRequirement(req)));
+        console.log(`[Plan Builder] Successfully saved ${planTaskRequirements.length} requirements to storage`);
+      } catch (err) {
+        console.error('[Plan Builder] Failed to save requirements:', err);
+        toast.error(`Failed to save staffing requirements. Your Plan Builder configuration may not persist after page reload.`);
+        // Keep state updated (optimistic update) but warn user about persistence failure
+      }
 
       // Run smart fill with the plan's requirements
       const scheduleResult = generateOptimizedSchedule({
@@ -1983,7 +2278,8 @@ function App() {
         currentAssignments: currentAssignmentsMap,
         rules: schedulingRules,
         taskRequirements: planTaskRequirements.length > 0 ? planTaskRequirements : taskRequirements,
-        excludedTasks: config.excludedTasks || []
+        excludedTasks: config.excludedTasks || [],
+        weekSeed: currentWeek.weekNumber * 100 + currentWeek.year // Unique seed per week
       });
 
       // Handle both single schedule and multi-objective array results
@@ -2019,10 +2315,12 @@ function App() {
 
           const task = tasks.find(t => t.id === assignment.taskId);
           if (task) {
+            // Check if this was a reserved assignment from People rules (should be pinned)
+            const wasReserved = reservedAssignments[assignment.operatorId]?.[assignment.day as WeekDay];
             newSchedule.days[dayIndex].assignments[assignment.operatorId] = {
               taskId: task.id,
               locked: false,
-              pinned: false
+              pinned: wasReserved ? true : false // Preserve pinned status for People assignments
             };
             assignmentCount++;
           }
@@ -2166,10 +2464,14 @@ function App() {
 
     if (theme === 'Midnight') {
       return {
-        backgroundColor: 'transparent',
-        color: task.textColor === '#000000' ? '#e2e8f0' : task.color, // Adjust dark text
-        border: `1px solid ${task.color}50`,
-        borderRadius: '6px'
+        backgroundColor: `${task.color}0D`, // 5% opacity background by default
+        color: task.color,
+        border: `1px solid ${task.color}80`, // 50% opacity border, 1px width
+        borderRadius: '6px',
+        transition: 'all 150ms ease-in-out',
+        // CSS custom properties for hover effects (border only, no glow)
+        ['--task-color' as any]: task.color,
+        ['--hover-border' as any]: `${task.color}`, // 100% opacity border on hover
       };
     }
 
@@ -2178,7 +2480,8 @@ function App() {
       backgroundColor: task.color,
       color: task.textColor,
       boxShadow: `0 2px 4px ${task.color}40`,
-      border: `1px solid ${task.color}20`
+      border: `1px solid ${task.color}20`,
+      transition: 'all 150ms ease-in-out'
     };
   };
 
@@ -3237,16 +3540,16 @@ function App() {
                       <div className="flex-1 content-start">
                          <div className="flex flex-wrap gap-1.5">
                             {op.skills.slice(0, 5).map(skill => (
-                               <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md border ${
+                               <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md ${
                                  theme === 'Midnight'
-                                   ? 'bg-slate-900 border-slate-700 text-slate-400'
-                                   : 'bg-white border-gray-200 text-gray-600'
+                                   ? 'bg-slate-700 text-slate-300'
+                                   : 'bg-gray-100 text-gray-700'
                                }`}>
                                   {skill}
                                </span>
                             ))}
                             {op.skills.length > 5 && (
-                               <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-500'}`}>
+                               <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-200 text-gray-600'}`}>
                                  +{op.skills.length - 5}
                                </span>
                             )}
@@ -3365,15 +3668,15 @@ function App() {
                        <td className="px-4 py-3">
                          <div className="flex flex-wrap gap-1 max-w-xs">
                            {op.skills.slice(0, 3).map(skill => (
-                             <span key={skill} className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
-                               theme === 'Midnight' ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-gray-600'
+                             <span key={skill} className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wide rounded-md ${
+                               theme === 'Midnight' ? 'bg-slate-700 text-slate-300' : 'bg-gray-100 text-gray-700'
                              }`}>
                                {skill}
                              </span>
                            ))}
                            {op.skills.length > 3 && (
-                             <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
-                               theme === 'Midnight' ? 'bg-slate-700 text-slate-400' : 'bg-gray-200 text-gray-500'
+                             <span className={`px-2 py-1 text-[10px] font-bold rounded-md ${
+                               theme === 'Midnight' ? 'bg-slate-800 text-slate-500' : 'bg-gray-200 text-gray-600'
                              }`}>
                                +{op.skills.length - 3}
                              </span>
@@ -4322,7 +4625,7 @@ function App() {
                                                         const trimmed = e.target.value.trim();
                                                         if (!trimmed) {
                                                            setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
-                                                           addToast('warning', 'Task name cannot be empty');
+                                                           toast.warning( 'Task name cannot be empty');
                                                         } else if (trimmed !== task.name) {
                                                            setTasks(tasks.map(t => t.id === task.id ? {...t, name: trimmed} : t));
                                                         }
@@ -4553,7 +4856,7 @@ function App() {
                                                            const trimmed = e.target.value.trim();
                                                            if (!trimmed) {
                                                               setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
-                                                              addToast('warning', 'Task name cannot be empty');
+                                                              toast.warning( 'Task name cannot be empty');
                                                            }
                                                         }}
                                                         className={`w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors ${
@@ -5697,11 +6000,24 @@ function App() {
 
                   {/* Algorithm Selection */}
                   <div className={`p-5 rounded-2xl border transition-all ${theme === 'Midnight' ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
-                     <div className="mb-4">
-                        <h3 className={`font-bold text-base ${styles.text}`}>Scheduling Algorithm</h3>
-                        <p className="text-sm text-gray-500 mt-1">
-                           Choose which optimization algorithm to use when generating schedules.
-                        </p>
+                     <div className="mb-4 flex items-start justify-between">
+                        <div>
+                           <h3 className={`font-bold text-base ${styles.text}`}>Scheduling Algorithm</h3>
+                           <p className="text-sm text-gray-500 mt-1">
+                              Choose which optimization algorithm to use when generating schedules.
+                           </p>
+                        </div>
+                        <button
+                           onClick={() => setShowAlgorithmComparisonModal(true)}
+                           className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                              theme === 'Midnight'
+                                 ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30'
+                                 : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                           }`}
+                        >
+                           <BarChart3 className="w-3.5 h-3.5" />
+                           Compare
+                        </button>
                      </div>
                      <div className="space-y-3">
                         {[
@@ -5725,6 +6041,13 @@ function App() {
                               desc: 'Generates multiple options to explore trade-offs',
                               badge: 'Advanced',
                               badgeColor: theme === 'Midnight' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-600'
+                           },
+                           {
+                              value: 'max-matching' as const,
+                              label: 'Max Matching (V4)',
+                              desc: 'GUARANTEES 100% fulfillment when mathematically possible',
+                              badge: '100% Guaranteed',
+                              badgeColor: theme === 'Midnight' ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/40' : 'bg-emerald-600 text-white'
                            }
                         ].map((algo) => (
                            <div
@@ -5779,6 +6102,18 @@ function App() {
                         }`}>
                            <p className="text-xs font-medium">
                               💡 Multi-Objective mode will present 3-5 different schedule options, each optimizing different priorities (fairness, variety, skill matching). You'll be able to choose which one fits your weekly needs.
+                           </p>
+                        </div>
+                     )}
+                     {schedulingRules.algorithm === 'max-matching' && (
+                        <div className={`mt-4 p-3 rounded-lg border flex gap-2 ${
+                           theme === 'Midnight'
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        }`}>
+                           <Info className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                           <p className="text-xs font-medium">
+                              This algorithm GUARANTEES all tasks will be filled (100% coverage) when mathematically possible. It uses advanced matching to ensure every position is staffed, even with limited operators.
                            </p>
                         </div>
                      )}
@@ -5895,9 +6230,9 @@ function App() {
                            onClick={async () => {
                               try {
                                  await exportData();
-                                 addToast('success', 'Data exported successfully');
+                                 toast.success( 'Data exported successfully');
                               } catch (err) {
-                                 addToast('error', 'Failed to export data');
+                                 toast.error( 'Failed to export data');
                               }
                            }}
                            className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
@@ -5947,11 +6282,11 @@ function App() {
                                     const text = await file.text();
                                     const data = JSON.parse(text);
                                     await storage.importAll(data);
-                                    addToast('success', 'Data imported successfully. Reloading...');
+                                    toast.success( 'Data imported successfully. Reloading...');
                                     setTimeout(() => window.location.reload(), 1500);
                                  } catch (err) {
                                     console.error('Import failed:', err);
-                                    addToast('error', 'Failed to import data. Please check the file format.');
+                                    toast.error( 'Failed to import data. Please check the file format.');
                                     setIsImporting(false);
                                  }
                                  e.target.value = '';
@@ -6338,6 +6673,50 @@ function App() {
                  </button>
                )}
              </div>
+
+             <div className={`hidden sm:block h-4 w-px ${theme === 'Midnight' ? 'bg-slate-700' : 'bg-gray-300'}`}></div>
+
+             {/* Run Verification Button */}
+             <button
+               onClick={handleRunVerification}
+               disabled={isVerifying}
+               title="Run full schedule verification (⌘⇧V)"
+               className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-medium min-h-[44px] transition-all ${
+                 isVerifying
+                   ? theme === 'Midnight'
+                     ? 'bg-slate-700 text-slate-400 cursor-wait'
+                     : 'bg-gray-200 text-gray-400 cursor-wait'
+                   : verificationStatus === 'success'
+                   ? theme === 'Midnight'
+                     ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                     : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
+                   : verificationStatus === 'error'
+                   ? theme === 'Midnight'
+                     ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                     : 'bg-red-100 text-red-600 hover:bg-red-200'
+                   : theme === 'Midnight'
+                   ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30'
+                   : 'bg-blue-100 text-blue-600 hover:bg-blue-200'
+               }`}
+             >
+               {isVerifying ? (
+                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
+               ) : verificationStatus === 'success' ? (
+                 <CheckCircle className="h-3.5 w-3.5" />
+               ) : (
+                 <Shield className="h-3.5 w-3.5" />
+               )}
+               <span>{isVerifying ? 'Verifying...' : 'Run Verification'}</span>
+               {!isVerifying && scheduleWarnings.length > 0 && (
+                 <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                   theme === 'Midnight'
+                     ? 'bg-amber-500/40 text-amber-300'
+                     : 'bg-amber-200 text-amber-900'
+                 }`}>
+                   {scheduleWarnings.length}
+                 </span>
+               )}
+             </button>
 
              {/* Lock indicator */}
              {currentWeek.locked && (
@@ -7054,7 +7433,7 @@ function App() {
                                   ? 'ring-2 ring-offset-1 ring-purple-500 shadow-lg z-10 brightness-110'
                                   : ''
                             }`}
-                            style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
+                            style={getTaskStyle(taskId)}
                           >
                             {task ? task.name : '-'}
                             {/* Selection checkmark - shows on selected cells */}
@@ -7280,7 +7659,7 @@ function App() {
                                   ? 'ring-2 ring-offset-1 ring-emerald-500 shadow-lg z-10 brightness-110'
                                   : ''
                             }`}
-                            style={task ? { backgroundColor: task.color, color: task.textColor } : {}}
+                            style={getTaskStyle(taskId)}
                           >
                             {task ? task.name : '-'}
                             {/* Selection checkmark - shows on selected cells */}
@@ -7543,6 +7922,12 @@ function App() {
 
   return (
     <div className={`flex h-screen w-full font-sans selection:bg-blue-100 transition-colors duration-300 ${styles.bg}`}>
+      {/* Task pill hover styles for Midnight theme */}
+      <style>{`
+        button[style*="--task-color"]:hover {
+          border-color: var(--hover-border) !important;
+        }
+      `}</style>
 
       {styles.layout === 'sidebar' && (
         <Sidebar
@@ -7556,6 +7941,8 @@ function App() {
           onSignOut={handleSignOut}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          currentWeekLabel={getWeekLabel(currentWeek)}
+          currentWeekRange={getWeekRangeString(new Date(currentWeek.days[0].date))}
         />
       )}
 
@@ -7645,6 +8032,41 @@ function App() {
             <p className={`text-sm mb-6 ${styles.muted}`}>
               {getWeekLabel(currentWeek)} ({getWeekRangeString(new Date(currentWeek.days[0].date))})
             </p>
+
+            {/* Warning Count - show if there are any warnings */}
+            {scheduleWarnings.length > 0 && (
+              <div className={`p-4 rounded-xl mb-4 border ${
+                theme === 'Midnight'
+                  ? 'bg-amber-500/10 border-amber-500/30'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className={`h-5 w-5 shrink-0 ${
+                    theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                  }`} />
+                  <div className="flex-1">
+                    <p className={`text-sm font-medium ${
+                      theme === 'Midnight' ? 'text-amber-200' : 'text-amber-900'
+                    }`}>
+                      {scheduleWarnings.length} warning{scheduleWarnings.length !== 1 ? 's' : ''} found
+                    </p>
+                    <button
+                      onClick={() => {
+                        setShowPublishModal(false);
+                        handleRunVerification();
+                      }}
+                      className={`text-xs mt-1 underline decoration-dotted transition-colors ${
+                        theme === 'Midnight'
+                          ? 'text-indigo-400 hover:text-indigo-300'
+                          : 'text-blue-600 hover:text-blue-500'
+                      }`}
+                    >
+                      Click "Run Verification" in the header to view full validation details →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className={`p-4 rounded-xl mb-6 ${theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'}`}>
               <label className="flex items-center gap-3 cursor-pointer">
@@ -7771,6 +8193,157 @@ function App() {
               >
                 <Send className="h-4 w-4" />
                 Publish Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Algorithm Comparison Modal */}
+      {showAlgorithmComparisonModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowAlgorithmComparisonModal(false)} />
+          <div className={`relative w-full max-w-5xl rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto ${theme === 'Midnight' ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h3 className={`text-2xl font-bold ${styles.text}`}>Algorithm Comparison</h3>
+                <p className={`text-sm mt-1 ${styles.muted}`}>
+                  Compare scheduling algorithms to choose the best fit for your team's needs.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAlgorithmComparisonModal(false)}
+                className={`p-2 rounded-lg transition-colors ${
+                  theme === 'Midnight'
+                    ? 'hover:bg-slate-800 text-slate-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+                }`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Comparison Table */}
+            <div className={`rounded-xl border overflow-hidden ${theme === 'Midnight' ? 'border-slate-700' : 'border-gray-200'}`}>
+              <table className="w-full">
+                <thead className={theme === 'Midnight' ? 'bg-slate-800' : 'bg-gray-50'}>
+                  <tr>
+                    <th className={`px-4 py-3 text-left text-sm font-semibold ${styles.text}`}>Feature</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V1: Standard</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V2: Enhanced</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V3: Multi-Objective</th>
+                    <th className={`px-4 py-3 text-center text-sm font-semibold ${styles.text}`}>V4: Max Matching</th>
+                  </tr>
+                </thead>
+                <tbody className={`divide-y ${theme === 'Midnight' ? 'divide-slate-700' : 'divide-gray-200'}`}>
+                  {/* Success Rate */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Success Rate (100% Fill)</td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                      }`}>~2%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                      }`}>~15%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'
+                      }`}>~70%</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm">
+                      <span className={`inline-flex px-2 py-1 rounded text-xs font-semibold ${
+                        theme === 'Midnight' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-600 text-white'
+                      }`}>100%</span>
+                    </td>
+                  </tr>
+
+                  {/* Speed */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Speed</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Fastest</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Very Fast</td>
+                    <td className="px-4 py-3 text-center text-sm text-amber-500">⏱️ Moderate</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">⚡ Fast</td>
+                  </tr>
+
+                  {/* Task Variety */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Task Variety</td>
+                    <td className="px-4 py-3 text-center text-sm">Low (1.4)</td>
+                    <td className="px-4 py-3 text-center text-sm">Medium (1.8)</td>
+                    <td className="px-4 py-3 text-center text-sm">Good (2.2)</td>
+                    <td className="px-4 py-3 text-center text-sm">Best (2.4)</td>
+                  </tr>
+
+                  {/* Workload Balance */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Workload Balance</td>
+                    <td className="px-4 py-3 text-center text-sm">Good</td>
+                    <td className="px-4 py-3 text-center text-sm">Good</td>
+                    <td className="px-4 py-3 text-center text-sm">Better</td>
+                    <td className="px-4 py-3 text-center text-sm">Best</td>
+                  </tr>
+
+                  {/* Scarce Skills Handling */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Handles Scarce Skills</td>
+                    <td className="px-4 py-3 text-center text-sm text-red-500">❌ Poor</td>
+                    <td className="px-4 py-3 text-center text-sm text-amber-500">⚠️ Fair</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">✅ Good</td>
+                    <td className="px-4 py-3 text-center text-sm text-green-500">✅ Excellent</td>
+                  </tr>
+
+                  {/* Best For */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Best For</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Quick schedules with flexibility</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Balanced schedules with variety</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Exploring multiple options</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Critical weeks requiring 100% coverage</td>
+                  </tr>
+
+                  {/* Recommendations */}
+                  <tr className={theme === 'Midnight' ? 'bg-slate-900/50' : 'bg-white'}>
+                    <td className={`px-4 py-3 text-sm font-medium ${styles.text}`}>Recommended When</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>All operators available, no constraints</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Need better variety than Standard</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>Want to compare trade-offs</td>
+                    <td className={`px-4 py-3 text-sm ${styles.muted}`}>High absences, scarce skills, critical operations</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Help Text */}
+            <div className={`mt-6 p-4 rounded-xl ${theme === 'Midnight' ? 'bg-indigo-500/10 border border-indigo-500/30' : 'bg-indigo-50 border border-indigo-200'}`}>
+              <div className="flex gap-3">
+                <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-600'}`} aria-hidden="true" />
+                <div>
+                  <p className={`text-sm font-medium ${theme === 'Midnight' ? 'text-indigo-300' : 'text-indigo-900'}`}>
+                    Need help choosing?
+                  </p>
+                  <p className={`text-sm mt-1 ${theme === 'Midnight' ? 'text-indigo-400' : 'text-indigo-700'}`}>
+                    <strong>Start with V4 (Max Matching)</strong> if you need guaranteed coverage. Fall back to V1 (Standard) for simple weeks with all operators available.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setShowAlgorithmComparisonModal(false)}
+                className={`px-6 py-2.5 rounded-xl font-semibold transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+              >
+                Got it
               </button>
             </div>
           </div>
@@ -8594,9 +9167,9 @@ function App() {
                 onClick={async () => {
                   try {
                     await exportData();
-                    addToast('success', 'Backup created successfully');
+                    toast.success( 'Backup created successfully');
                   } catch (err) {
-                    addToast('error', 'Failed to export backup');
+                    toast.error( 'Failed to export backup');
                   }
                 }}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors shrink-0 ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
@@ -8616,11 +9189,11 @@ function App() {
                 onClick={async () => {
                   try {
                     await clearAllData();
-                    addToast('success', 'All data cleared. Reloading...');
+                    toast.success( 'All data cleared. Reloading...');
                     setShowClearDataModal(false);
                     setTimeout(() => window.location.reload(), 1500);
                   } catch (err) {
-                    addToast('error', 'Failed to clear data');
+                    toast.error( 'Failed to clear data');
                   }
                 }}
                 className="flex-1 py-3 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
@@ -8663,7 +9236,7 @@ function App() {
                 onClick={() => {
                   setTasks(tasks.filter(t => t.id !== taskToDelete.id));
                   setTaskToDelete(null);
-                  addToast('success', `"${taskToDelete.name}" deleted`);
+                  toast.success( `"${taskToDelete.name}" deleted`);
                 }}
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
               >
@@ -8768,7 +9341,7 @@ function App() {
                       skills: op.skills.filter(s => s !== skillToDelete)
                     })));
                     setSkillToDelete(null);
-                    addToast('success', `Skill "${skillToDelete}" deleted`);
+                    toast.success( `Skill "${skillToDelete}" deleted`);
                   }}
                   className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
                 >

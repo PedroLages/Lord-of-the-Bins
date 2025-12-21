@@ -110,7 +110,7 @@ function useDebouncedSave<T>(
  *
  * Usage:
  * ```tsx
- * const { loadingState, initialData, saveOperators, saveSchedule } = useStorage();
+ * const { loadingState, initialData, saveOperators, saveSchedule } = useStorage({ enabled: isAuthenticated });
  *
  * if (loadingState === 'loading') return <LoadingScreen />;
  * if (loadingState === 'error') return <ErrorScreen />;
@@ -125,14 +125,20 @@ function useDebouncedSave<T>(
  * };
  * ```
  */
-export function useStorage(): UseStorageResult {
+export function useStorage(options: { enabled?: boolean } = {}): UseStorageResult {
+  const { enabled = true } = options;
   const [loadingState, setLoadingState] = useState<LoadingState>('loading');
   const [error, setError] = useState<StorageErrorInfo | null>(null);
   const [isFirstTime, setIsFirstTime] = useState(false);
   const [initialData, setInitialData] = useState<StorageState | null>(null);
 
-  // Initialize on mount
+  // Initialize on mount (only when enabled)
   useEffect(() => {
+    if (!enabled) {
+      // Keep in loading state until enabled
+      return;
+    }
+
     async function init() {
       try {
         // Initialize storage and load data
@@ -184,7 +190,7 @@ export function useStorage(): UseStorageResult {
     }
 
     init();
-  }, []);
+  }, [enabled]);
 
   // Save methods
   const saveOperators = useCallback(async (operators: Operator[]) => {

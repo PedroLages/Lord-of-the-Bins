@@ -1,6 +1,6 @@
-import { MOCK_OPERATORS, MOCK_TASKS } from '../../types';
+import { MOCK_OPERATORS, MOCK_TASKS, AppearanceSettings, FillGapsSettings } from '../../types';
 import { DEFAULT_RULES } from '../schedulingService';
-import { storage } from './indexedDBStorage';
+import { storage } from './index';
 import { db } from './database';
 import type { AppSettings } from './database';
 import type { Operator, TaskType, WeeklySchedule } from '../../types';
@@ -18,6 +18,8 @@ export interface InitResult {
     theme: 'Modern' | 'Midnight';
     schedulingRules: SchedulingRules;
     skills?: string[];
+    appearance?: AppearanceSettings;
+    fillGapsSettings?: FillGapsSettings;
   };
 }
 
@@ -40,11 +42,12 @@ export async function initializeStorage(): Promise<InitResult> {
   // Initialize database
   const isFirstTime = await storage.initialize();
 
+  // Seed data for IndexedDB
   if (isFirstTime) {
     console.log('First time setup - seeding default data...');
     await seedDefaultData();
   } else {
-    // Run migrations for existing installations
+    // Run migrations for existing installations (IndexedDB only)
     await runMigrations();
   }
 
@@ -103,6 +106,8 @@ async function runMigrations(): Promise<void> {
   try {
     // Migration: Remove Process/AD task (t14) - no longer used
     await migrateRemoveProcessAD();
+    // Migration: Give all regular operators all skills
+    await migrateAddAllSkillsToOperators();
   } catch (error) {
     console.error('Migration error:', error);
     // Don't throw - migrations are best-effort
@@ -156,6 +161,49 @@ async function migrateRemoveProcessAD(): Promise<void> {
   }
 
   console.log(`Migration complete: Removed Process/AD task, updated ${updatedCount} schedules`);
+}
+
+/**
+ * Migration: Give all regular operators all available skills
+ * This provides maximum scheduling flexibility
+ */
+async function migrateAddAllSkillsToOperators(): Promise<void> {
+  // All skills available to regular operators
+  const ALL_REGULAR_SKILLS = [
+    'Troubleshooter',
+    'Quality Checker',
+    'MONO Counter',
+    'Filler',
+    'LVB Sheet',
+    'Decanting',
+    'Platform',
+    'EST',
+    'Exceptions',
+    'Troubleshooter AD'
+  ];
+
+  // Get all operators
+  const allOperators = await db.operators.toArray();
+  let updatedCount = 0;
+
+  for (const operator of allOperators) {
+    // Only update Regular operators (not Flex or Coordinators)
+    if (operator.type === 'Regular') {
+      // Check if they already have all skills (idempotent check)
+      const hasAllSkills = ALL_REGULAR_SKILLS.every(skill =>
+        operator.skills.includes(skill)
+      );
+
+      if (!hasAllSkills) {
+        // Update to have all skills
+        operator.skills = ALL_REGULAR_SKILLS;
+        await db.operators.put(operator);
+        updatedCount++;
+      }
+    }
+  }
+
+  console.log(`Migration complete: Updated ${updatedCount} regular operators with all skills`);
 }
 
 /**

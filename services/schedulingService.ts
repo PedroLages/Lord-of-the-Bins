@@ -1,4 +1,8 @@
 import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement, PlanBuilderViolation, FillGapsResult, FillGapsSettings } from '../types';
+import { generateMaxMatchingSchedule } from './scheduling/maxMatchingScheduler';
+
+// Algorithm type for scheduling
+export type SchedulingAlgorithm = 'greedy' | 'greedy-tabu' | 'multi-objective' | 'max-matching';
 
 // Configuration for the scheduling algorithm
 export interface SchedulingRules {
@@ -13,6 +17,7 @@ export interface SchedulingRules {
   randomizationFactor: number; // 0-20: adds variety to schedule generation
   useV2Algorithm: boolean; // Use enhanced V2 algorithm with decay scoring and early filtering
   prioritizeSkillVariety: boolean; // V2: Prioritize using all of operator's skills across the week
+  algorithm?: SchedulingAlgorithm; // Which scheduling algorithm to use
 }
 
 export const DEFAULT_RULES: SchedulingRules = {
@@ -38,22 +43,15 @@ const COORDINATOR_TASKS = ['People', 'Process', 'Off process', 'Off Process'];
 // TC Task IDs for group scheduling
 const TC_TASK_IDS = ['t11', 't12', 't13']; // Process, People, Off process
 
-interface ScheduleRequestData {
+export interface ScheduleRequestData {
   operators: Operator[];
   tasks: TaskType[];
   days: WeekDay[];
-  currentAssignments?: Record<string, Record<string, ScheduleAssignment>>; // dayIndex -> operatorId -> assignment
+  currentAssignments?: Record<string, Record<string, ScheduleAssignment>>; // operatorId -> dayName -> assignment
   rules?: SchedulingRules;
   taskRequirements?: TaskRequirement[]; // Optional type-based requirements per task
-}
-
-interface ScheduleResult {
-  assignments: Array<{
-    day: WeekDay;
-    operatorId: string;
-    taskId: string;
-  }>;
-  warnings: ScheduleWarning[];
+  excludedTasks?: string[]; // Task IDs to exclude from scheduling (e.g., tasks with 0 requirements)
+  weekSeed?: number; // Week number for randomization variety across weeks
 }
 
 export interface ScheduleWarning {
@@ -62,6 +60,15 @@ export interface ScheduleWarning {
   day?: WeekDay;
   operatorId?: string;
   taskId?: string;
+}
+
+export interface ScheduleResult {
+  assignments: Array<{
+    day: WeekDay;
+    operatorId: string;
+    taskId: string;
+  }>;
+  warnings: ScheduleWarning[];
 }
 
 interface OperatorScore {
@@ -519,19 +526,37 @@ function calculateAssignmentScore(
 
 /**
  * Validate a schedule and return warnings
+ * @param showStaffingWarnings - If false, only show "hard" warnings (skill mismatch, availability, coordinator restrictions).
+ *                               Set to true after Plan Builder apply, false during manual editing.
  */
 export function validateSchedule(
   assignments: Record<string, Record<string, ScheduleAssignment>>, // dayIndex -> operatorId -> assignment
   operators: Operator[],
   tasks: TaskType[],
   days: WeekDay[],
-  taskRequirements?: Record<string, Record<string, number>> // taskId -> day -> required count
+  taskRequirements?: Record<string, Record<string, number>>, // taskId -> day -> required count
+  showStaffingWarnings: boolean = true // Default to true for backward compatibility
 ): ScheduleWarning[] {
   const warnings: ScheduleWarning[] = [];
+
+  // Count total assignments to check if schedule is empty
+  let totalAssignments = 0;
+  days.forEach((_, dayIndex) => {
+    const dayAssignments = assignments[dayIndex] || {};
+    Object.values(dayAssignments).forEach(assignment => {
+      if (assignment.taskId) totalAssignments++;
+    });
+  });
+
+  // If schedule is empty, return no warnings
+  if (totalAssignments === 0) {
+    return [];
+  }
 
   days.forEach((day, dayIndex) => {
     const dayAssignments = assignments[dayIndex] || {};
     const taskCounts: Record<string, number> = {};
+    const taskLockedCounts: Record<string, number> = {}; // Track locked assignments per task
 
     Object.entries(dayAssignments).forEach(([opId, assignment]) => {
       if (!assignment.taskId) return;
@@ -541,7 +566,7 @@ export function validateSchedule(
 
       if (!operator || !task) return;
 
-      // Skill mismatch warning
+      // Skill mismatch warning - always show, even for locked (this is a real error)
       if (!operator.skills.includes(task.requiredSkill)) {
         warnings.push({
           type: 'skill_mismatch',
@@ -552,7 +577,7 @@ export function validateSchedule(
         });
       }
 
-      // Availability conflict warning
+      // Availability conflict warning - always show, even for locked (this is a real error)
       if (!operator.availability[day]) {
         warnings.push({
           type: 'availability_conflict',
@@ -562,7 +587,7 @@ export function validateSchedule(
         });
       }
 
-      // Coordinator task restriction
+      // Coordinator task restriction - always show (this is a real error)
       if (operator.type === 'Coordinator') {
         const isCoordinatorTask = COORDINATOR_TASKS.some(
           ct => task.name.toLowerCase().includes(ct.toLowerCase())
@@ -580,40 +605,59 @@ export function validateSchedule(
 
       // Track task counts
       taskCounts[assignment.taskId] = (taskCounts[assignment.taskId] || 0) + 1;
-    });
 
-    // Check for understaffed tasks - using explicit requirements or task.requiredOperators
-    tasks.forEach(task => {
-      // Get required operators - from explicit requirements or from task definition
-      let required = 1;
-      if (taskRequirements && taskRequirements[task.id]) {
-        required = taskRequirements[task.id][day] || 0;
-      } else {
-        required = getRequiredOperatorsForDay(task, day);
-      }
-
-      const assigned = taskCounts[task.id] || 0;
-
-      if (required > 0 && assigned < required) {
-        warnings.push({
-          type: 'understaffed',
-          message: `${task.name} needs ${required} operator${required > 1 ? 's' : ''} on ${day}, only ${assigned} assigned`,
-          day,
-          taskId: task.id,
-        });
-      }
-
-      // Check for overstaffed tasks - only when explicit requirements are configured
-      // This warns when more operators are assigned than planned
-      if (taskRequirements && taskRequirements[task.id] && required > 0 && assigned > required) {
-        warnings.push({
-          type: 'overstaffed',
-          message: `${task.name} has ${assigned} operator${assigned > 1 ? 's' : ''} on ${day}, but only ${required} planned`,
-          day,
-          taskId: task.id,
-        });
+      // Track locked assignments per task (user intentionally set these)
+      if (assignment.locked || assignment.pinned) {
+        taskLockedCounts[assignment.taskId] = (taskLockedCounts[assignment.taskId] || 0) + 1;
       }
     });
+
+    // Check for understaffed/overstaffed tasks - ONLY if showStaffingWarnings is true
+    // These are "soft" warnings that shouldn't appear during manual gap filling
+    if (showStaffingWarnings) {
+      tasks.forEach(task => {
+        // Get required operators - from explicit requirements or from task definition
+        let required = 1;
+        if (taskRequirements && taskRequirements[task.id]) {
+          required = taskRequirements[task.id][day] || 0;
+        } else {
+          required = getRequiredOperatorsForDay(task, day);
+        }
+
+        const assigned = taskCounts[task.id] || 0;
+        const lockedCount = taskLockedCounts[task.id] || 0;
+
+        // Skip understaffed/overstaffed warning if ALL assigned operators are locked
+        // (user intentionally configured this staffing level)
+        // Note: Only skip if there ARE locked assignments (assigned > 0 && lockedCount === assigned)
+        const allAssignmentsAreLocked = assigned > 0 && lockedCount === assigned;
+
+        if (required > 0 && assigned < required) {
+          // If all assignments are locked, skip the warning - user knows what they're doing
+          if (!allAssignmentsAreLocked) {
+            warnings.push({
+              type: 'understaffed',
+              message: `${task.name} needs ${required} operator${required > 1 ? 's' : ''} on ${day}, only ${assigned} assigned`,
+              day,
+              taskId: task.id,
+            });
+          }
+        }
+
+        // Check for overstaffed tasks - only when explicit requirements are configured
+        // Skip if ALL assigned operators are locked (user intentionally configured this)
+        if (taskRequirements && taskRequirements[task.id] && required > 0 && assigned > required) {
+          if (!allAssignmentsAreLocked) {
+            warnings.push({
+              type: 'overstaffed',
+              message: `${task.name} has ${assigned} operator${assigned > 1 ? 's' : ''} on ${day}, but only ${required} planned`,
+              day,
+              taskId: task.id,
+            });
+          }
+        }
+      });
+    } // end if (showStaffingWarnings)
   });
 
   // Check for double assignments (same operator, same day, multiple tasks)
@@ -854,11 +898,19 @@ function scheduleTCsAsGroup(
 
 /**
  * Main entry point for schedule generation
- * Routes to V1 or V2 algorithm based on rules.useV2Algorithm flag
+ * Routes to the appropriate algorithm based on rules.algorithm setting
  */
 export function generateOptimizedSchedule(data: ScheduleRequestData): ScheduleResult {
   const rules = data.rules || DEFAULT_RULES;
 
+  // Route based on algorithm selection
+  if (rules.algorithm === 'max-matching') {
+    // V4: Maximum Bipartite Matching - GUARANTEES 100% fulfillment when possible
+    // Pass week seed for variety across different weeks
+    return generateMaxMatchingSchedule(data, data.weekSeed);
+  }
+
+  // Legacy routing via useV2Algorithm flag (for backward compatibility)
   if (rules.useV2Algorithm) {
     return generateSmartScheduleV2(data);
   }

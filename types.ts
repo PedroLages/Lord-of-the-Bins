@@ -404,6 +404,11 @@ export interface TaskType {
   // Number of operators required per day (defaults to 1 if not specified)
   // Can be a single number for all days or per-day configuration
   requiredOperators?: number | Record<WeekDay, number>;
+  // If true, this skill is only assignable to coordinators and won't appear on the schedule grid
+  isCoordinatorOnly?: boolean;
+  // If true, this is a "heavy" task that should be rotated and distributed fairly
+  // Heavy tasks: subject to maxConsecutiveDaysOnSameTask and fair distribution rules
+  isHeavy?: boolean;
 }
 
 export interface Operator {
@@ -483,20 +488,20 @@ export function getTCFixedColor(task: TaskType): string | undefined {
 }
 
 export const MOCK_TASKS: TaskType[] = [
-  { id: 't1', name: 'Troubleshooter', color: '#0ea5e9', textColor: '#ffffff', requiredSkill: 'Troubleshooter', requiredOperators: 1 }, // Sky blue
-  { id: 't2', name: 'Quality checker', color: '#374151', textColor: '#ffffff', requiredSkill: 'Quality Checker', requiredOperators: 2 }, // Dark Gray - needs 2 people
+  { id: 't1', name: 'Troubleshooter', color: '#0ea5e9', textColor: '#ffffff', requiredSkill: 'Troubleshooter', requiredOperators: 1, isHeavy: true }, // Sky blue - HEAVY
+  { id: 't2', name: 'Quality checker', color: '#374151', textColor: '#ffffff', requiredSkill: 'Quality Checker', requiredOperators: 2, isHeavy: true }, // Dark Gray - needs 2 people - HEAVY
   { id: 't3', name: 'MONO counter', color: '#fbbf24', textColor: '#000000', requiredSkill: 'MONO Counter', requiredOperators: 1 }, // Amber
   { id: 't4', name: 'Filler', color: '#84cc16', textColor: '#000000', requiredSkill: 'Filler', requiredOperators: 1 }, // Lime
-  { id: 't5', name: 'LVB Sheet', color: '#fbbf24', textColor: '#000000', requiredSkill: 'LVB Sheet', requiredOperators: 1 }, // Amber
+  { id: 't5', name: 'LVB Sheet', color: '#fbbf24', textColor: '#000000', requiredSkill: 'LVB Sheet', requiredOperators: 1, isHeavy: true }, // Amber - HEAVY
   { id: 't6', name: 'Decanting', color: '#86efac', textColor: '#000000', requiredSkill: 'Decanting', requiredOperators: 2 }, // Light Green - needs 2 people
-  { id: 't7', name: 'Platform', color: '#f472b6', textColor: '#000000', requiredSkill: 'Platform', requiredOperators: 1 }, // Pink
-  { id: 't8', name: 'EST', color: '#a78bfa', textColor: '#ffffff', requiredSkill: 'EST', requiredOperators: 1 }, // Purple
-  { id: 't9', name: 'Exceptions', color: '#ef4444', textColor: '#ffffff', requiredSkill: 'Exceptions', requiredOperators: 1 }, // Red
-  { id: 't15', name: 'Exceptions/Station', color: '#f87171', textColor: '#ffffff', requiredSkill: 'Exceptions/Station', requiredOperators: 2 }, // Light Red - Flex operator task, needs 2
-  { id: 't10', name: 'Troubleshooter AD', color: '#f97316', textColor: '#ffffff', requiredSkill: 'Troubleshooter AD', requiredOperators: 1 }, // Orange - Separate skill from regular Troubleshooter
-  { id: 't11', name: 'Process', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1 }, // TC - Fixed Light Green (RGB 223, 251, 233)
-  { id: 't12', name: 'People', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'People', requiredOperators: 1 }, // TC - Fixed Light Green (RGB 223, 251, 233)
-  { id: 't13', name: 'Off process', color: '#EBEDF0', textColor: '#000000', requiredSkill: 'Off Process', requiredOperators: 1 }, // TC - Fixed Light Gray (RGB 235, 237, 240)
+  { id: 't7', name: 'Platform', color: '#f472b6', textColor: '#000000', requiredSkill: 'Platform', requiredOperators: 1, isHeavy: true }, // Pink - HEAVY
+  { id: 't8', name: 'EST', color: '#a78bfa', textColor: '#ffffff', requiredSkill: 'EST', requiredOperators: 1, isHeavy: true }, // Purple - HEAVY
+  { id: 't9', name: 'Exceptions', color: '#ef4444', textColor: '#ffffff', requiredSkill: 'Exceptions', requiredOperators: 1, isHeavy: true }, // Red - HEAVY
+  { id: 't15', name: 'Exceptions/Station', color: '#f87171', textColor: '#ffffff', requiredSkill: 'Exceptions/Station', requiredOperators: 2, isHeavy: true }, // Light Red - Flex operator task, needs 2 - HEAVY
+  { id: 't10', name: 'Troubleshooter AD', color: '#f97316', textColor: '#ffffff', requiredSkill: 'Troubleshooter AD', requiredOperators: 1, isHeavy: true }, // Orange - Separate skill from regular Troubleshooter - HEAVY
+  { id: 't11', name: 'Process', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'Process', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Green (RGB 223, 251, 233)
+  { id: 't12', name: 'People', color: '#DFFBE9', textColor: '#000000', requiredSkill: 'People', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Green (RGB 223, 251, 233)
+  { id: 't13', name: 'Off process', color: '#EBEDF0', textColor: '#000000', requiredSkill: 'Off Process', requiredOperators: 1, isCoordinatorOnly: true }, // TC - Fixed Light Gray (RGB 235, 237, 240)
 ];
 
 /**
@@ -509,26 +514,26 @@ export function getRequiredOperatorsForDay(task: TaskType, day: WeekDay): number
 }
 
 export const MOCK_OPERATORS: Operator[] = [
-  // Regular operators
-  { id: 'op1', name: 'Alesja', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op2', name: 'Beata', type: 'Regular', status: 'Active', skills: ['Decanting', 'Quality Checker'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op3', name: 'Bruno', type: 'Regular', status: 'Active', skills: ['Platform', 'Troubleshooter', 'EST', 'Quality Checker'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op4', name: 'Erica', type: 'Regular', status: 'Active', skills: ['Decanting'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op5', name: 'Gulhatun', type: 'Regular', status: 'Active', skills: ['LVB Sheet', 'Exceptions', 'MONO Counter', 'Troubleshooter', 'Quality Checker'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op6', name: 'Ionel', type: 'Regular', status: 'Active', skills: ['Quality Checker', 'Troubleshooter', 'Filler', 'Platform', 'EST'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op7', name: 'Irma', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Filler', 'Exceptions', 'Quality Checker'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op8', name: 'José', type: 'Regular', status: 'Active', skills: ['Quality Checker', 'Exceptions', 'Troubleshooter'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op9', name: 'Lukasz', type: 'Regular', status: 'Active', skills: ['Exceptions', 'Troubleshooter', 'LVB Sheet', 'Quality Checker', 'MONO Counter'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op12', name: 'Maha', type: 'Regular', status: 'Active', skills: ['Filler', 'LVB Sheet', 'Troubleshooter'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op13', name: 'Mihaela', type: 'Regular', status: 'Active', skills: ['Decanting'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op14', name: 'Monikka', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'MONO Counter', 'EST'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op15', name: 'Nuno', type: 'Regular', status: 'Active', skills: ['Exceptions', 'Troubleshooter', 'Quality Checker', 'Platform'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op16', name: 'Pedro', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'MONO Counter', 'Exceptions'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op17', name: 'Susana', type: 'Regular', status: 'Active', skills: ['EST', 'Troubleshooter', 'Quality Checker', 'MONO Counter'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op18', name: 'Sylwia', type: 'Regular', status: 'Active', skills: ['Decanting'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op19', name: 'Zeynep', type: 'Regular', status: 'Active', skills: ['MONO Counter', 'Filler', 'Troubleshooter', 'LVB Sheet', 'Exceptions'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op20', name: 'Yonay', type: 'Regular', status: 'Active', skills: ['Platform', 'Quality Checker', 'Troubleshooter', 'Exceptions'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
-  { id: 'op21', name: 'Javier', type: 'Regular', status: 'Active', skills: ['MONO Counter', 'EST', 'Platform', 'Troubleshooter'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  // Regular operators - ALL operators have ALL skills for maximum flexibility
+  { id: 'op1', name: 'Alesja', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op2', name: 'Beata', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op3', name: 'Bruno', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op4', name: 'Erica', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op5', name: 'Gulhatun', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op6', name: 'Ionel', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op7', name: 'Irma', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op8', name: 'José', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op9', name: 'Lukasz', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op12', name: 'Maha', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op13', name: 'Mihaela', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op14', name: 'Monikka', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op15', name: 'Nuno', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op16', name: 'Pedro', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op17', name: 'Susana', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op18', name: 'Sylwia', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op19', name: 'Zeynep', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op20', name: 'Yonay', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
+  { id: 'op21', name: 'Javier', type: 'Regular', status: 'Active', skills: ['Troubleshooter', 'Quality Checker', 'MONO Counter', 'Filler', 'LVB Sheet', 'Decanting', 'Platform', 'EST', 'Exceptions', 'Troubleshooter AD'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
   // Flex operators
   { id: 'op22', name: 'Flex Op 1', type: 'Flex', status: 'Active', skills: ['Exceptions/Station'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },
   { id: 'op23', name: 'Flex Op 2', type: 'Flex', status: 'Active', skills: ['Exceptions/Station'], availability: { Mon: true, Tue: true, Wed: true, Thu: true, Fri: true } },

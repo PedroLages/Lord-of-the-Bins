@@ -17,7 +17,7 @@
 import type { Operator, TaskType, WeekDay, ScheduleAssignment, TaskRequirement, OperatorTypeOption } from '../../types';
 import { getRequirementsForDay, getTotalFromRequirements } from '../../types';
 import type { ScheduleResult, ScheduleWarning, SchedulingRules, ScheduleRequestData } from '../schedulingService';
-import { DEFAULT_RULES, setSchedulingSeed, generateRandomSeed } from '../schedulingService';
+import { DEFAULT_RULES } from '../schedulingService';
 import { propagateConstraints } from './constraintPropagator';
 import { prioritizeSlots, getEligibleOperatorsForSlot, type PrioritizedSlot } from './slotPrioritizer';
 import type { PropagationParams, ForcedAssignment, ConstraintSlot, ConcreteOperatorType } from './constraintTypes';
@@ -59,12 +59,8 @@ export function generateEnhancedSchedule(data: ScheduleRequestData): ScheduleRes
     excludedTasks = [],
   } = data;
 
-  // Set randomization seed for this generation
-  const seed = rules.schedulingSeed ?? generateRandomSeed();
-  setSchedulingSeed(seed);
-
   console.log('[Enhanced Scheduler] Starting enhanced schedule generation');
-  console.log(`[Enhanced Scheduler] Using seed: ${seed}, randomization: ${rules.randomizationFactor || 0}%`);
+  console.log(`[Enhanced Scheduler] Randomization factor: ${rules.randomizationFactor || 0}%`);
   console.log(`[Enhanced Scheduler] Operators: ${allOperators.length}, Tasks: ${allTasks.length}, Days: ${days.length}`);
   console.log(`[Enhanced Scheduler] Excluded tasks: ${excludedTasks.join(', ') || 'none'}`);
 
@@ -587,8 +583,8 @@ function scoreCandidateForSlot(
  * Get max consecutive days for a task based on category.
  */
 function getMaxConsecutiveDays(taskName: string, rules?: SchedulingRules): number {
-  const heavyTasks = rules?.heavyTasks ?? HEAVY_TASKS;
-  const softTasks = rules?.softTasks ?? ['Filler', 'Exceptions', 'Decanting'];
+  const heavyTasks = HEAVY_TASKS;
+  const softTasks = ['Filler', 'Exceptions', 'Decanting'];
 
   if (heavyTasks.includes(taskName)) return 1;
   if (softTasks.includes(taskName)) return 2;

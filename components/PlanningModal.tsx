@@ -393,6 +393,33 @@ const TaskSelector: React.FC<{
   );
 };
 
+// Operator Type Selector (Regular / Flex)
+const OperatorTypeSelector: React.FC<{
+  value: 'Regular' | 'Flex';
+  onChange: (value: 'Regular' | 'Flex') => void;
+  isDark: boolean;
+}> = ({ value, onChange, isDark }) => {
+  return (
+    <motion.select
+      whileFocus={{ scale: 1.02 }}
+      value={value}
+      onChange={(e) => onChange(e.target.value as 'Regular' | 'Flex')}
+      className={`px-3 py-2 rounded-lg text-sm font-semibold cursor-pointer outline-none transition-all ${
+        value === 'Flex'
+          ? isDark
+            ? 'bg-amber-500/25 text-amber-300 ring-1 ring-amber-500/30'
+            : 'bg-amber-100 text-amber-700 ring-1 ring-amber-300'
+          : isDark
+            ? 'bg-blue-500/25 text-blue-300 ring-1 ring-blue-500/30'
+            : 'bg-blue-100 text-blue-700 ring-1 ring-blue-300'
+      }`}
+    >
+      <option value="Regular">Regular</option>
+      <option value="Flex">Flex</option>
+    </motion.select>
+  );
+};
+
 // Person Chip for Team Up
 const PersonChip: React.FC<{
   name: string;
@@ -460,8 +487,8 @@ const LivePreview: React.FC<{
     return stats;
   }, [rules]);
 
-  const maxCount = Math.max(...Object.values(dayStats), 1);
-  const totalAssignments = Object.values(dayStats).reduce((a, b) => a + b, 0);
+  const maxCount = Math.max(...Object.values(dayStats) as number[], 1);
+  const totalAssignments = (Object.values(dayStats) as number[]).reduce((a, b) => a + b, 0);
   const numericRules = rules.filter(r => r.type === 'numeric' && r.enabled).length;
   const pairingRules = rules.filter(r => r.type === 'pairing' && r.enabled).length;
 
@@ -1567,6 +1594,12 @@ const PlanningModal: React.FC<PlanningModalProps> = ({
                                       <NumberStepper
                                         value={req.count}
                                         onChange={(count) => updateSkillRequirement(rule.id, req.id, { count })}
+                                        isDark={isDark}
+                                      />
+
+                                      <OperatorTypeSelector
+                                        value={req.operatorType}
+                                        onChange={(operatorType) => updateSkillRequirement(rule.id, req.id, { operatorType })}
                                         isDark={isDark}
                                       />
 
