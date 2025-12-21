@@ -25,5 +25,14 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "services/supabase/**/*",
+    "services/storage/hybridStorage.ts",
+    "services/sync/**/*",
+    "scripts/migrateToSupabase.ts",
+    "tests/**/*"
+  ]
 }

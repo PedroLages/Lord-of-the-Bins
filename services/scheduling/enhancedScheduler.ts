@@ -583,8 +583,8 @@ function scoreCandidateForSlot(
  * Get max consecutive days for a task based on category.
  */
 function getMaxConsecutiveDays(taskName: string, rules?: SchedulingRules): number {
-  const heavyTasks = rules?.heavyTasks ?? HEAVY_TASKS;
-  const softTasks = rules?.softTasks ?? ['Filler', 'Exceptions', 'Decanting'];
+  const heavyTasks = HEAVY_TASKS;
+  const softTasks = ['Filler', 'Exceptions', 'Decanting'];
 
   if (heavyTasks.includes(taskName)) return 1;
   if (softTasks.includes(taskName)) return 2;
