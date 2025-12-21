@@ -7,8 +7,9 @@
  * - Offline cached sessions
  */
 
-import { getSupabaseClient, isSupabaseConfigured } from './client';
+import { requireSupabaseClient, getSupabaseClient, isSupabaseConfigured } from './client';
 import type { User as SupabaseUser, Session } from '@supabase/supabase-js';
+import type { DbUser, UpdateTables } from './types';
 
 // App user type (maps to users table)
 export interface CloudUser {
@@ -50,7 +51,7 @@ export async function signIn(
   identifier: string,
   password: string
 ): Promise<CloudUser> {
-  const supabase = getSupabaseClient();
+  const supabase = requireSupabaseClient();
 
   // Determine if this is an email or user code
   const email = isEmail(identifier) ? identifier : userCodeToEmail(identifier);
@@ -76,7 +77,7 @@ export async function signIn(
     }
 
     // Fetch user profile from users table
-    const { data: profile, error: profileError } = await supabase
+    const { data, error: profileError } = await supabase
       .from('users')
       .select(`
         *,
@@ -85,9 +86,16 @@ export async function signIn(
       .eq('id', authData.user.id)
       .single();
 
-    if (profileError) {
-      throw new Error(`Failed to fetch user profile: ${profileError.message}`);
+    if (profileError || !data) {
+      throw new Error(
+        profileError
+          ? `Failed to fetch user profile: ${profileError.message}`
+          : 'User profile not found'
+      );
     }
+
+    // Type assertion to help TypeScript understand the query result
+    const profile = data as DbUser & { shifts: { name: string } | null };
 
     const user: CloudUser = {
       id: profile.id,
@@ -96,7 +104,7 @@ export async function signIn(
       displayName: profile.display_name,
       role: profile.role,
       shiftId: profile.shift_id,
-      shiftName: (profile.shifts as any)?.name || 'Unknown Shift',
+      shiftName: profile.shifts?.name || 'Unknown Shift',
     };
 
     // Cache session and user for offline access
@@ -148,11 +156,7 @@ export async function signUp(
   shiftId: string,
   email?: string
 ): Promise<CloudUser> {
-  const supabase = getSupabaseClient();
-
-  if (!supabase) {
-    throw new Error('Cannot sign up in offline mode');
-  }
+  const supabase = requireSupabaseClient();
 
   const internalEmail = userCodeToEmail(userCode);
 
@@ -171,18 +175,20 @@ export async function signUp(
   }
 
   // Create profile in users table
-  const { error: profileError } = await supabase.from('users').insert({
+  const userData = {
     id: authData.user.id,
     user_code: userCode,
     email: email || null,
     display_name: displayName,
     role,
     shift_id: shiftId,
-  });
+    preferences: {},
+  };
+
+  const { error: profileError } = await supabase.from('users').insert(userData as any);
 
   if (profileError) {
-    // Try to clean up auth user if profile creation fails
-    await supabase.auth.admin?.deleteUser(authData.user.id);
+    // Note: Can't clean up auth user from client-side (admin API requires service role key)
     throw new Error(`Failed to create user profile: ${profileError.message}`);
   }
 
@@ -232,7 +238,7 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
   }
 
   // Fetch profile
-  const { data: profile, error } = await supabase
+  const { data, error } = await supabase
     .from('users')
     .select(`
       *,
@@ -241,9 +247,12 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     .eq('id', authUser.id)
     .single();
 
-  if (error || !profile) {
+  if (error || !data) {
     return null;
   }
+
+  // Type assertion to help TypeScript understand the query result
+  const profile = data as DbUser & { shifts: { name: string } | null };
 
   return {
     id: profile.id,
@@ -252,7 +261,7 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     displayName: profile.display_name,
     role: profile.role,
     shiftId: profile.shift_id,
-    shiftName: (profile.shifts as any)?.name || 'Unknown Shift',
+    shiftName: profile.shifts?.name || 'Unknown Shift',
   };
 }
 
@@ -314,11 +323,7 @@ export async function updateProfile(updates: {
   displayName?: string;
   email?: string;
 }): Promise<void> {
-  const supabase = getSupabaseClient();
-
-  if (!supabase) {
-    throw new Error('Cannot update profile in offline mode');
-  }
+  const supabase = requireSupabaseClient();
 
   const { data: { user: authUser } } = await supabase.auth.getUser();
 
@@ -326,12 +331,16 @@ export async function updateProfile(updates: {
     throw new Error('Not authenticated');
   }
 
-  const { error } = await supabase
+  // Type the update data for better type safety
+  const updateData: UpdateTables<'users'> = {
+    display_name: updates.displayName,
+    email: updates.email,
+  };
+
+  // Cast client to any to work around Supabase type inference limitations
+  const { error } = await (supabase as any)
     .from('users')
-    .update({
-      display_name: updates.displayName,
-      email: updates.email,
-    })
+    .update(updateData)
     .eq('id', authUser.id);
 
   if (error) {

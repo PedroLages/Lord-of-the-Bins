@@ -8,6 +8,28 @@
 import Dexie from 'dexie';
 import { getSupabaseClient, isSupabaseConfigured } from '../supabase/client';
 
+// Allowed table names for sync operations (security whitelist)
+const ALLOWED_TABLES = [
+  'operators',
+  'tasks',
+  'schedules',
+  'task_requirements',
+  'scheduling_rules',
+  'app_settings',
+  'activity_log'
+] as const;
+
+type AllowedTable = typeof ALLOWED_TABLES[number];
+
+/**
+ * Validate that the table name is in the allowed whitelist
+ */
+function validateTableName(table: string): asserts table is AllowedTable {
+  if (!ALLOWED_TABLES.includes(table as AllowedTable)) {
+    throw new Error(`Invalid table name for sync: ${table}. Allowed tables: ${ALLOWED_TABLES.join(', ')}`);
+  }
+}
+
 // Sync queue item structure
 export interface SyncQueueItem {
   id?: number; // Auto-incremented by Dexie
@@ -215,14 +237,17 @@ async function processQueueItem(
 ): Promise<void> {
   const { table, operation, data } = item;
 
+  // Validate table name against whitelist
+  validateTableName(table);
+
   switch (operation) {
     case 'insert': {
-      const { error } = await supabase.from(table).insert(data);
+      const { error } = await (supabase as any).from(table).insert(data);
       if (error) throw new Error(error.message);
       break;
     }
     case 'update': {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from(table)
         .update(data)
         .eq('local_id', item.localId);
