@@ -19,14 +19,14 @@ import {
 } from 'lucide-react';
 import {
   Operator, TaskType, WeeklySchedule, ScheduleAssignment, MOCK_OPERATORS, MOCK_TASKS, WeekDay, INITIAL_SKILLS, getRequiredOperatorsForDay, TaskRequirement, WeeklyPlanningConfig, NumericStaffingRule, OperatorPairingRule, PlanBuilderViolation, TC_SKILLS, FeedbackItem, FEEDBACK_CATEGORIES, FEEDBACK_STATUSES, FeedbackCategory, FeedbackStatus,
-  type DemoUser, type AppearanceSettings, type ColorTheme, COLOR_PALETTES, DEFAULT_APPEARANCE_SETTINGS, getPaletteById, addRecentColor, getContrastTextColor, isColorInPalette, findClosestPaletteIndex,
+  type AppearanceSettings, type ColorTheme, COLOR_PALETTES, DEFAULT_APPEARANCE_SETTINGS, getPaletteById, addRecentColor, getContrastTextColor, isColorInPalette, findClosestPaletteIndex,
   calculateDeltaEHex, MIN_DELTA_E_THRESHOLD, findAccessiblePaletteColors, sortByDeltaEFromColor,
   isTCTask, getTCFixedColor,
   type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
   type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
-import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
+import { getCurrentUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
@@ -126,7 +126,7 @@ function App() {
   // Auth state
   const [authChecking, setAuthChecking] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<CloudUser | null>(null);
 
   // Toast system
   const toast = useToasts();
@@ -300,25 +300,17 @@ function App() {
     setActivityLog(loadActivityLog());
   }, []);
 
-  // Check auth state on mount
+  // Check auth state on mount and listen for changes
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // First check if any users exist
-        const usersExist = await hasUsers();
-        if (!usersExist) {
-          setNeedsSetup(true);
-          setAuthChecking(false);
-          return;
-        }
-
         // Check if user is logged in
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
           // Apply user's theme preference
           if (user.preferences?.theme) {
-            setTheme(user.preferences.theme);
+            setTheme(user.preferences.theme as Theme);
           }
         }
       } catch (err) {
@@ -329,11 +321,21 @@ function App() {
     };
 
     checkAuth();
+
+    // Listen for auth state changes
+    const unsubscribe = onAuthStateChange((user) => {
+      setCurrentUser(user);
+      if (user?.preferences?.theme) {
+        setTheme(user.preferences.theme as Theme);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Handle sign out
-  const handleSignOut = useCallback(() => {
-    authLogout();
+  const handleSignOut = useCallback(async () => {
+    await signOut();
     setCurrentUser(null);
     toast.info('Signed out successfully');
   }, [toast]);
@@ -346,10 +348,10 @@ function App() {
   }, []);
 
   // Handle login
-  const handleLogin = useCallback((user: DemoUser) => {
+  const handleLogin = useCallback((user: CloudUser) => {
     setCurrentUser(user);
     if (user.preferences?.theme) {
-      setTheme(user.preferences.theme);
+      setTheme(user.preferences.theme as Theme);
     }
     toast.success(`Welcome back, ${user.displayName}!`);
   }, [toast]);
@@ -4197,20 +4199,27 @@ function App() {
                 theme={theme}
                 styles={styles}
                 onUpdateUser={async (updates) => {
-                  const updated = await updateUser(currentUser.id, updates);
-                  if (updated) {
-                    setCurrentUser(updated);
-                    // Also update session data for sidebar
-                    updateSessionData({
-                      displayName: updated.displayName,
-                      profilePicture: updated.profilePicture,
-                    });
+                  await updateProfile({
+                    displayName: updates.displayName,
+                    email: updates.email,
+                  });
+                  // Refresh user data
+                  const refreshedUser = await getCurrentUser();
+                  if (refreshedUser) {
+                    setCurrentUser(refreshedUser);
                   }
+                  toast.success('Profile updated successfully');
                 }}
                 onChangePassword={async (current, newPass) => {
-                  await changePassword(currentUser.id, current, newPass);
+                  // Supabase doesn't verify current password, it just updates
+                  await updatePassword(newPass);
+                  toast.success('Password updated successfully');
                 }}
-                onProcessPicture={processProfilePicture}
+                onProcessPicture={async (file) => {
+                  // Profile picture upload not yet implemented in Supabase
+                  toast.info('Profile picture upload coming soon');
+                  return '';
+                }}
                 toast={toast}
               />
            )}
@@ -7842,14 +7851,9 @@ function App() {
     );
   }
 
-  // --- Setup Screen (First Run) ---
-  if (needsSetup) {
-    return <SetupPage onComplete={handleSetupComplete} onSwitchToLogin={() => setNeedsSetup(false)} />;
-  }
-
   // --- Login Screen (Not Authenticated) ---
   if (!currentUser) {
-    return <LoginPage onLogin={handleLogin} onSwitchToSetup={() => setNeedsSetup(true)} />;
+    return <LoginPage onLogin={handleLogin} />;
   }
 
   // --- Loading Screen ---

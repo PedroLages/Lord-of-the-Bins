@@ -19,11 +19,11 @@ import {
   Package,
   Boxes,
 } from 'lucide-react';
-import { login } from '../services/authService';
-import type { DemoUser } from '../types';
+import { signIn, type CloudUser } from '../services/supabase/authService';
+import { isSupabaseConfigured } from '../services/supabase/client';
 
 interface LoginPageProps {
-  onLogin: (user: DemoUser) => void;
+  onLogin: (user: CloudUser) => void;
   onSwitchToSetup?: () => void;
 }
 
@@ -39,7 +39,7 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
     e.preventDefault();
 
     if (!username.trim() || !password) {
-      setError('Please enter batch number and password');
+      setError('Please enter user code/email and password');
       return;
     }
 
@@ -47,13 +47,37 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
     setError(null);
 
     try {
-      const user = await login(username, password);
+      const user = await signIn(username, password);
       onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       setIsLoading(false);
     }
   };
+
+  // Check if Supabase is configured
+  if (!isSupabaseConfigured()) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-8">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-xl p-8">
+          <div className="flex items-center gap-3 mb-4">
+            <AlertCircle className="w-6 h-6 text-amber-400" />
+            <h2 className="text-xl font-bold text-white">Configuration Required</h2>
+          </div>
+          <p className="text-slate-400 mb-4">
+            Supabase is not configured. Please set the following environment variables in your <code className="text-indigo-400 bg-slate-800 px-2 py-1 rounded">.env</code> file:
+          </p>
+          <ul className="list-disc list-inside text-slate-400 space-y-2 mb-4">
+            <li><code className="text-indigo-400">VITE_SUPABASE_URL</code></li>
+            <li><code className="text-indigo-400">VITE_SUPABASE_ANON_KEY</code></li>
+          </ul>
+          <p className="text-sm text-slate-500">
+            See <code className="text-indigo-400 bg-slate-800 px-2 py-1 rounded">.env.example</code> for instructions.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0f172a] flex overflow-hidden">
@@ -135,10 +159,10 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Batch Number Field */}
+            {/* User Code or Email Field */}
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-2">
-                Batch Number
+                User Code or Email
               </label>
               <div className="relative">
                 <div className={`absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center border-r transition-colors ${
@@ -152,17 +176,14 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
                 </div>
                 <input
                   type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
                   value={username}
                   onChange={(e) => {
-                    const value = e.target.value.replace(/\D/g, '');
-                    setUsername(value);
+                    setUsername(e.target.value);
                     setError(null);
                   }}
                   onFocus={() => setFocusedField('username')}
                   onBlur={() => setFocusedField(null)}
-                  placeholder="12345"
+                  placeholder="EMP001 or your@email.com"
                   autoComplete="username"
                   autoFocus
                   className={`w-full pl-14 pr-4 py-3.5 bg-slate-900 border rounded-lg text-white placeholder-slate-600 focus:outline-none transition-all ${

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { getInitials, getRoleDisplayText, type DemoUser } from '../types';
+import { getInitials } from '../types';
+import type { CloudUser } from '../services/supabase/authService';
 
 interface SidebarProps {
   activeTab: string;
@@ -9,7 +10,7 @@ interface SidebarProps {
   toggleSidebar: () => void;
   theme: string;
   onOpenFeedback?: () => void;
-  user?: DemoUser | null;
+  user?: CloudUser | null;
   onSignOut?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -185,7 +186,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   />
                 ) : (
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'team-leader'
+                    user.role === 'Team Leader'
                       ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
                       : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
                   }`}>
@@ -196,13 +197,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white truncate">{user.displayName}</p>
                   <div className="flex items-center gap-1">
-                    {user.role === 'team-leader' ? (
+                    {user.role === 'Team Leader' ? (
                       <Crown className="w-3 h-3 text-amber-400" />
                     ) : (
                       <Shield className="w-3 h-3 text-emerald-400" />
                     )}
-                    <span className={`text-xs ${user.role === 'team-leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {getRoleDisplayText(user.role)}
+                    <span className={`text-xs ${user.role === 'Team Leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {user.role} • {user.shiftName}
                     </span>
                   </div>
                 </div>
@@ -223,7 +224,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               ) : (
                 <div
                   className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'team-leader'
+                    user.role === 'Team Leader'
                       ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
                       : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
                   }`}
