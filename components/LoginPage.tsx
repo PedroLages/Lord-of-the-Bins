@@ -56,7 +56,7 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
   };
 
   // Check if Supabase is configured
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseConfigured) {
     return (
       <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-8">
         <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-xl p-8">
@@ -120,15 +120,19 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
             Where chaos meets order, and every pallet finds its destiny.
           </p>
 
-          {/* Stats or features */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-slate-900 rounded-xl p-4 border border-slate-800">
-              <div className="text-2xl font-bold text-indigo-400">99.2%</div>
-              <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Scheduling accuracy</div>
+          {/* Key features */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-slate-400">
+              <div className="w-2 h-2 rounded-full bg-indigo-400"></div>
+              <span className="text-sm">Smart constraint-based scheduling</span>
             </div>
-            <div className="bg-slate-900 rounded-xl p-4 border border-slate-800">
-              <div className="text-2xl font-bold text-indigo-400">24</div>
-              <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Active operators</div>
+            <div className="flex items-center gap-3 text-slate-400">
+              <div className="w-2 h-2 rounded-full bg-indigo-400"></div>
+              <span className="text-sm">Role-based access control</span>
+            </div>
+            <div className="flex items-center gap-3 text-slate-400">
+              <div className="w-2 h-2 rounded-full bg-indigo-400"></div>
+              <span className="text-sm">Real-time shift management</span>
             </div>
           </div>
         </div>
