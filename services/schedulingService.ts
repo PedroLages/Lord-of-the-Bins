@@ -54,6 +54,14 @@ export interface ScheduleRequestData {
   weekSeed?: number; // Week number for randomization variety across weeks
 }
 
+export interface ScheduleWarning {
+  type: 'skill_mismatch' | 'availability_conflict' | 'double_assignment' | 'understaffed' | 'overstaffed' | 'consecutive_heavy';
+  message: string;
+  day?: WeekDay;
+  operatorId?: string;
+  taskId?: string;
+}
+
 export interface ScheduleResult {
   assignments: Array<{
     day: WeekDay;
@@ -61,14 +69,6 @@ export interface ScheduleResult {
     taskId: string;
   }>;
   warnings: ScheduleWarning[];
-}
-
-export interface ScheduleWarning {
-  type: 'skill_mismatch' | 'availability_conflict' | 'double_assignment' | 'understaffed' | 'overstaffed' | 'consecutive_heavy';
-  message: string;
-  day?: WeekDay;
-  operatorId?: string;
-  taskId?: string;
 }
 
 interface OperatorScore {

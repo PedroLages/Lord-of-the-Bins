@@ -66,6 +66,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - AUTH_MIGRATION_GUIDE.md - Migration from Supabase to local auth
 - PRE_MERGE_VERIFICATION.md - Pre-merge verification checklist
+- SUPABASE_V2_PLAN.md - Supabase V2 hybrid architecture plan
+
+**supabase/** - Supabase configuration and migrations
+
+- README.md - Supabase setup guide
+- migrations/001_create_schema.sql - Database schema
+- migrations/002_create_rls_policies.sql - Row Level Security policies
 
 ## Project Overview
 
@@ -124,6 +131,23 @@ npm run preview      # Preview production build
   - `getAdjacentWeek()` - Gets prev/next week for navigation
   - `getWeekLabel()` / `getWeekRangeString()` - Display formatting
   - `isCurrentWeek()` - Check if viewing current week
+
+**services/supabase/** - Cloud sync (optional):
+
+- `client.ts` - Supabase client singleton
+- `types.ts` - Database TypeScript types
+- `authService.ts` - Authentication (user codes + email)
+- `supabaseStorage.ts` - Cloud storage implementation
+- `realtimeService.ts` - Real-time subscriptions
+
+**services/sync/** - Sync queue and data export:
+
+- `syncQueue.ts` - Background sync queue for offline-first
+- `dataExport.ts` - Export/import data as JSON
+
+**services/storage/** - Data persistence:
+
+- `hybridStorage.ts` - Combines IndexedDB + Supabase sync
 
 **components/** - UI components:
 

@@ -1,4 +1,4 @@
-import { MOCK_OPERATORS, MOCK_TASKS } from '../../types';
+import { MOCK_OPERATORS, MOCK_TASKS, AppearanceSettings, FillGapsSettings } from '../../types';
 import { DEFAULT_RULES } from '../schedulingService';
 import { storage } from './index';
 import { db } from './database';
@@ -18,6 +18,8 @@ export interface InitResult {
     theme: 'Modern' | 'Midnight';
     schedulingRules: SchedulingRules;
     skills?: string[];
+    appearance?: AppearanceSettings;
+    fillGapsSettings?: FillGapsSettings;
   };
 }
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, FileImage, FileText, MessageCircle, Check, Loader2, Palette, FileSpreadsheet, Table2, AlertTriangle, AlertCircle } from 'lucide-react';
-import { WeeklySchedule, Operator, TaskType, ScheduleWarning } from '../types';
+import { WeeklySchedule, Operator, TaskType } from '../types';
+import { ScheduleWarning } from '../services/schedulingService';
 import {
   exportToPng,
   exportToPngClassic,

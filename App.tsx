@@ -24,7 +24,7 @@ import {
   isTCTask, getTCFixedColor,
   type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
-  type PlanningTemplate
+  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
 import { hasUsers, getCurrentUser, logout as authLogout, updateUser, processProfilePicture, changePassword, updateSessionData } from './services/authService';
 import OperatorModal from './components/OperatorModal';
@@ -37,7 +37,7 @@ import ProfileSettings from './components/ProfileSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
-import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule, FillGapsResult } from './services/schedulingService';
+import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
   ActivityLogEntry,
@@ -115,6 +115,7 @@ function App() {
     getAllPlanningTemplates,
     savePlanningTemplate,
     deletePlanningTemplate,
+    clearAllData,
   } = useStorage();
 
   const [theme, setTheme] = useState<Theme>('Modern');
@@ -220,7 +221,7 @@ function App() {
   // Auto-save schedule history when it changes
   useEffect(() => {
     if (dataInitialized) {
-      Object.values(scheduleHistory).forEach(schedule => {
+      Object.values(scheduleHistory).forEach((schedule: WeeklySchedule) => {
         saveSchedule(schedule);
       });
     }
@@ -448,9 +449,21 @@ function App() {
 
   // Validate Plan Builder requirements whenever schedule or requirements change
   useEffect(() => {
-    const violations = validatePlanBuilderRequirements(currentWeek, tasks, taskRequirements, excludedTasks);
+    // Transform currentWeek.days to assignments: Record<operatorId, Record<day, assignment>>
+    const assignments: Record<string, Record<string, ScheduleAssignment>> = {};
+    currentWeek.days.forEach(day => {
+      Object.entries(day.assignments).forEach(([operatorId, assignment]: [string, ScheduleAssignment]) => {
+        if (!assignments[operatorId]) {
+          assignments[operatorId] = {};
+        }
+        assignments[operatorId][day.dayOfWeek] = assignment;
+      });
+    });
+
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const violations = validatePlanBuilderRequirements(assignments, operators, tasks, daysList, taskRequirements);
     setPlanBuilderViolations(violations);
-  }, [currentWeek, tasks, taskRequirements, excludedTasks]);
+  }, [currentWeek, tasks, taskRequirements, excludedTasks, operators]);
 
   // Toast notifications for Plan Builder violations
   const previousViolationsCount = useRef<number>(0);
@@ -806,7 +819,7 @@ function App() {
 
   const handleAddNewTask = () => {
     if (!newTaskName.trim()) {
-      addToast('warning', 'Please enter a task name');
+      toast.warning('Please enter a task name');
       return;
     }
     const newTaskId = `t${Date.now()}`;
@@ -820,7 +833,7 @@ function App() {
     };
     setTasks(prev => [...prev, newTask]);
     setShowAddTaskModal(false);
-    addToast('success', `Task "${newTaskName.trim()}" created`);
+    toast.success(`Task "${newTaskName.trim()}" created`);
   };
 
   const handleUpdateTaskRequiredOperators = (taskId: string, count: number) => {
@@ -1083,9 +1096,9 @@ function App() {
       let anchor = selectionAnchor;
       if (!anchor && selectedCells.size > 0) {
         // Find the first selected cell in this row
-        const firstInRow = Array.from(selectedCells).find(key => key.startsWith(`${opId}-`));
+        const firstInRow = Array.from(selectedCells).find((key: string) => key.startsWith(`${opId}-`)) as string | undefined;
         if (firstInRow) {
-          const [, dayStr] = firstInRow.split('-');
+          const [, dayStr] = (firstInRow as string).split('-');
           anchor = { opId, dayIndex: parseInt(dayStr, 10) };
         }
       }
@@ -1787,7 +1800,7 @@ function App() {
       // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
       currentWeek.days.forEach((day) => {
-        Object.entries(day.assignments).forEach(([opId, assignment]) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
           if (!currentAssignmentsMap[opId]) {
             currentAssignmentsMap[opId] = {};
           }
@@ -1919,23 +1932,34 @@ function App() {
     );
 
     if (configuredTasks.length === 0) {
-      addToast({
-        type: 'warning',
-        title: 'No Task Requirements',
-        message: 'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
-        duration: 6000,
-      });
+      toast.warning(
+        'No Task Requirements',
+        'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
+        { duration: 6000 }
+      );
       return;
     }
 
-    const result = fillGapsSchedule({
-      schedule: currentWeek,
-      operators,
-      tasks: configuredTasks,
-      rules: schedulingRules,
-      excludedOperators: excludedOperatorsMap,
-      fillGapsSettings,
+    // Transform currentWeek to assignments map
+    const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
+    currentWeek.days.forEach((day) => {
+      Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
+        if (!currentAssignmentsMap[opId]) {
+          currentAssignmentsMap[opId] = {};
+        }
+        currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
+      });
     });
+
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const result = fillGapsSchedule(
+      operators,
+      configuredTasks,
+      daysList,
+      currentAssignmentsMap,
+      schedulingRules,
+      fillGapsSettings
+    );
 
     setFillGapsResult(result);
     setShowFillGapsPreview(true);
@@ -2023,7 +2047,7 @@ function App() {
         taskId: tr.taskId,
         defaultRequirements: tr.defaultRequirements.map(r => ({ ...r })),
         dailyOverrides: tr.dailyOverrides ? Object.fromEntries(
-          Object.entries(tr.dailyOverrides).map(([day, reqs]) => [day, reqs?.map(r => ({ ...r }))])
+          Object.entries(tr.dailyOverrides).map(([day, reqs]: [string, OperatorTypeRequirement[]]) => [day, reqs?.map(r => ({ ...r }))])
         ) as Partial<Record<WeekDay, OperatorTypeRequirement[]>> : {},
         enabled: tr.enabled,
       }));
@@ -2202,7 +2226,7 @@ function App() {
       // The scheduler expects this structure to respect locked/pinned assignments
       const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
       currentWeek.days.forEach((day) => {
-        Object.entries(day.assignments).forEach(([opId, assignment]) => {
+        Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
           if (!currentAssignmentsMap[opId]) {
             currentAssignmentsMap[opId] = {};
           }
@@ -4601,7 +4625,7 @@ function App() {
                                                         const trimmed = e.target.value.trim();
                                                         if (!trimmed) {
                                                            setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
-                                                           addToast('warning', 'Task name cannot be empty');
+                                                           toast.warning( 'Task name cannot be empty');
                                                         } else if (trimmed !== task.name) {
                                                            setTasks(tasks.map(t => t.id === task.id ? {...t, name: trimmed} : t));
                                                         }
@@ -4832,7 +4856,7 @@ function App() {
                                                            const trimmed = e.target.value.trim();
                                                            if (!trimmed) {
                                                               setTasks(tasks.map(t => t.id === task.id ? {...t, name: 'Untitled Task'} : t));
-                                                              addToast('warning', 'Task name cannot be empty');
+                                                              toast.warning( 'Task name cannot be empty');
                                                            }
                                                         }}
                                                         className={`w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors ${
@@ -6206,9 +6230,9 @@ function App() {
                            onClick={async () => {
                               try {
                                  await exportData();
-                                 addToast('success', 'Data exported successfully');
+                                 toast.success( 'Data exported successfully');
                               } catch (err) {
-                                 addToast('error', 'Failed to export data');
+                                 toast.error( 'Failed to export data');
                               }
                            }}
                            className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
@@ -6258,11 +6282,11 @@ function App() {
                                     const text = await file.text();
                                     const data = JSON.parse(text);
                                     await storage.importAll(data);
-                                    addToast('success', 'Data imported successfully. Reloading...');
+                                    toast.success( 'Data imported successfully. Reloading...');
                                     setTimeout(() => window.location.reload(), 1500);
                                  } catch (err) {
                                     console.error('Import failed:', err);
-                                    addToast('error', 'Failed to import data. Please check the file format.');
+                                    toast.error( 'Failed to import data. Please check the file format.');
                                     setIsImporting(false);
                                  }
                                  e.target.value = '';
@@ -9143,9 +9167,9 @@ function App() {
                 onClick={async () => {
                   try {
                     await exportData();
-                    addToast('success', 'Backup created successfully');
+                    toast.success( 'Backup created successfully');
                   } catch (err) {
-                    addToast('error', 'Failed to export backup');
+                    toast.error( 'Failed to export backup');
                   }
                 }}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors shrink-0 ${theme === 'Midnight' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
@@ -9165,11 +9189,11 @@ function App() {
                 onClick={async () => {
                   try {
                     await clearAllData();
-                    addToast('success', 'All data cleared. Reloading...');
+                    toast.success( 'All data cleared. Reloading...');
                     setShowClearDataModal(false);
                     setTimeout(() => window.location.reload(), 1500);
                   } catch (err) {
-                    addToast('error', 'Failed to clear data');
+                    toast.error( 'Failed to clear data');
                   }
                 }}
                 className="flex-1 py-3 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
@@ -9212,7 +9236,7 @@ function App() {
                 onClick={() => {
                   setTasks(tasks.filter(t => t.id !== taskToDelete.id));
                   setTaskToDelete(null);
-                  addToast('success', `"${taskToDelete.name}" deleted`);
+                  toast.success( `"${taskToDelete.name}" deleted`);
                 }}
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
               >
@@ -9317,7 +9341,7 @@ function App() {
                       skills: op.skills.filter(s => s !== skillToDelete)
                     })));
                     setSkillToDelete(null);
-                    addToast('success', `Skill "${skillToDelete}" deleted`);
+                    toast.success( `Skill "${skillToDelete}" deleted`);
                   }}
                   className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
                 >

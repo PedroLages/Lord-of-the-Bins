@@ -487,8 +487,8 @@ const LivePreview: React.FC<{
     return stats;
   }, [rules]);
 
-  const maxCount = Math.max(...Object.values(dayStats), 1);
-  const totalAssignments = Object.values(dayStats).reduce((a, b) => a + b, 0);
+  const maxCount = Math.max(...Object.values(dayStats) as number[], 1);
+  const totalAssignments = (Object.values(dayStats) as number[]).reduce((a, b) => a + b, 0);
   const numericRules = rules.filter(r => r.type === 'numeric' && r.enabled).length;
   const pairingRules = rules.filter(r => r.type === 'pairing' && r.enabled).length;
 
