@@ -4227,6 +4227,7 @@ function App() {
                   await updateProfile({
                     displayName: updates.displayName,
                     email: updates.email,
+                    preferences: updates.preferences,
                   });
                   // Refresh user data
                   const refreshedUser = await getCurrentUser();
@@ -4240,9 +4241,36 @@ function App() {
                   toast.success('Password updated successfully');
                 }}
                 onProcessPicture={async (file) => {
-                  // Profile picture upload not yet implemented in Supabase
-                  toast.info('Profile picture upload coming soon');
-                  return '';
+                  try {
+                    // Convert image to base64
+                    const reader = new FileReader();
+                    const base64Promise = new Promise<string>((resolve, reject) => {
+                      reader.onload = () => resolve(reader.result as string);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(file);
+                    });
+
+                    const base64 = await base64Promise;
+
+                    // Save to user preferences
+                    await updateProfile({
+                      preferences: {
+                        ...currentUser?.preferences,
+                        profilePicture: base64,
+                      },
+                    });
+
+                    // Refresh user data to show new picture
+                    const refreshedUser = await getCurrentUser();
+                    if (refreshedUser) {
+                      setCurrentUser(refreshedUser);
+                    }
+
+                    return base64;
+                  } catch (error) {
+                    console.error('Failed to upload profile picture:', error);
+                    throw error;
+                  }
                 }}
                 toast={toast}
               />

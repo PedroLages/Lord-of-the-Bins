@@ -1,7 +1,9 @@
-import React from 'react';
-import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, PanelLeftClose, PanelLeft } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, PanelLeftClose, PanelLeft, Cloud, CloudOff, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { getInitials } from '../types';
 import type { CloudUser } from '../services/supabase/authService';
+import { hybridStorage } from '../services/storage';
+import type { SyncState } from '../services/sync/syncQueue';
 
 interface SidebarProps {
   activeTab: string;
@@ -38,6 +40,45 @@ const Sidebar: React.FC<SidebarProps> = ({
     { id: 'team', label: 'Team', icon: Users },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
+
+  // Sync status state
+  const [syncState, setSyncState] = useState<SyncState>({
+    status: 'idle',
+    pendingCount: 0,
+    lastSyncAt: null,
+    error: null,
+  });
+
+  // Subscribe to sync state changes
+  useEffect(() => {
+    if (!hybridStorage.isCloudEnabled()) return;
+
+    const unsubscribe = hybridStorage.subscribeSyncState((state) => {
+      setSyncState(state);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Get sync status display
+  const getSyncStatus = () => {
+    if (!hybridStorage.isCloudEnabled()) {
+      return { icon: CloudOff, text: 'Offline', color: 'text-slate-500' };
+    }
+
+    switch (syncState.status) {
+      case 'syncing':
+        return { icon: RefreshCw, text: `Syncing ${syncState.pendingCount}...`, color: 'text-yellow-400', spin: true };
+      case 'error':
+        return { icon: AlertCircle, text: 'Sync Error', color: 'text-red-400' };
+      case 'offline':
+        return { icon: CloudOff, text: 'Offline', color: 'text-slate-500' };
+      default:
+        return { icon: CheckCircle2, text: 'Synced', color: 'text-emerald-400' };
+    }
+  };
+
+  const syncStatus = getSyncStatus();
 
   const getThemeStyles = () => {
     if (theme === 'Midnight') {
@@ -233,6 +274,32 @@ const Sidebar: React.FC<SidebarProps> = ({
                   {getInitials(user.displayName)}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Sync Status Indicator */}
+          {!isCollapsed && (
+            <div className="px-4 py-2 mb-2">
+              <div className="flex items-center gap-2 text-xs">
+                <syncStatus.icon
+                  className={`h-3.5 w-3.5 ${syncStatus.color} ${syncStatus.spin ? 'animate-spin' : ''}`}
+                />
+                <span className={syncStatus.color}>{syncStatus.text}</span>
+                {syncState.lastSyncAt && syncState.status === 'idle' && (
+                  <span className="text-slate-600 text-[10px]">
+                    {new Date(syncState.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Collapsed sync status */}
+          {isCollapsed && (
+            <div className="flex justify-center mb-2" title={syncStatus.text}>
+              <syncStatus.icon
+                className={`h-4 w-4 ${syncStatus.color} ${syncStatus.spin ? 'animate-spin' : ''}`}
+              />
             </div>
           )}
 
