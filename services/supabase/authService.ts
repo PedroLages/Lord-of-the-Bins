@@ -24,7 +24,13 @@ export interface CloudUser {
     theme?: string;
     colorPalette?: string;
     profilePicture?: string;
+    deactivated?: boolean;
+    temporaryPassword?: string;
+    passwordResetBy?: string;
+    passwordResetAt?: string;
+    mustChangePassword?: boolean;
   };
+  createdAt?: string;
 }
 
 // Invite token type
@@ -643,6 +649,79 @@ export async function reactivateUser(userId: string): Promise<void> {
   if (error) {
     throw new Error(error.message);
   }
+}
+
+/**
+ * Generate a temporary password for a team member (Team Leaders only)
+ * Returns the temporary password that Team Leader must give to the TC
+ * TC must change password on next login
+ *
+ * Note: We can't directly change Supabase passwords from client-side.
+ * This sets a temporary password in preferences that's checked during login.
+ */
+export async function generateTemporaryPassword(userId: string): Promise<{ temporaryPassword: string; userCode: string }> {
+  const supabase = requireSupabaseClient();
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can reset passwords');
+  }
+
+  // Get target user to verify same shift
+  const { data: targetUser, error: fetchError} = await (supabase
+    .from('users')
+    .select('shift_id, role, user_code, preferences')
+    .eq('id', userId)
+    .single() as any);
+
+  if (fetchError) {
+    throw new Error(fetchError.message);
+  }
+
+  if (!targetUser) {
+    throw new Error('User not found');
+  }
+
+  // Can't reset password for users from different shifts
+  if (targetUser.shift_id !== currentUser.shiftId) {
+    throw new Error('Cannot reset passwords for users in other shifts');
+  }
+
+  // Can't reset password for other Team Leaders
+  if (targetUser.role === 'Team Leader') {
+    throw new Error('Cannot reset passwords for Team Leaders');
+  }
+
+  // Generate a random 8-character temporary password
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoid ambiguous characters
+  let temporaryPassword = '';
+  for (let i = 0; i < 8; i++) {
+    temporaryPassword += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+
+  // Update user preferences to track password reset
+  const { error: prefError } = await (supabase.from('users').update as any)({
+    preferences: {
+      ...(targetUser.preferences || {}),
+      temporaryPassword,
+      passwordResetBy: currentUser.id,
+      passwordResetAt: new Date().toISOString(),
+      mustChangePassword: true,
+    },
+  }).eq('id', userId);
+
+  if (prefError) {
+    throw new Error('Failed to set temporary password');
+  }
+
+  return {
+    temporaryPassword,
+    userCode: targetUser.user_code
+  };
 }
 
 // ============================================
