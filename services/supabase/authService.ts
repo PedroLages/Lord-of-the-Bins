@@ -609,3 +609,281 @@ export async function reactivateUser(userId: string): Promise<void> {
     throw new Error(error.message);
   }
 }
+
+// ============================================
+// INVITE TOKEN MANAGEMENT
+// ============================================
+
+/**
+ * Generate a secure random token for invites
+ */
+function generateSecureToken(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Generate an invite token (Team Leaders only)
+ * @param role - Role for the invited user ('TC' or 'Team Leader')
+ * @param expiresInHours - Hours until the invite expires (default: 168 = 7 days)
+ * @returns The generated invite token
+ */
+export async function generateInviteToken(
+  role: 'Team Leader' | 'TC' = 'TC',
+  expiresInHours: number = 168
+): Promise<InviteToken> {
+  const supabase = requireSupabaseClient();
+
+  // Get current user to verify they're a Team Leader
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can generate invite tokens');
+  }
+
+  // Generate secure token
+  const token = generateSecureToken();
+
+  // Calculate expiration date
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + expiresInHours);
+
+  // Insert invite token
+  const { data, error } = await supabase
+    .from('invite_tokens')
+    .insert({
+      token,
+      shift_id: currentUser.shiftId,
+      role,
+      created_by: currentUser.id,
+      expires_at: expiresAt.toISOString(),
+      status: 'active',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data) {
+    throw new Error('Failed to create invite token');
+  }
+
+  return {
+    id: data.id,
+    token: data.token,
+    shiftId: data.shift_id,
+    shiftName: currentUser.shiftName,
+    role: data.role,
+    createdBy: data.created_by,
+    createdByName: currentUser.displayName,
+    expiresAt: data.expires_at,
+    usedBy: data.used_by,
+    usedAt: data.used_at,
+    status: data.status,
+    metadata: data.metadata || {},
+    createdAt: data.created_at,
+  };
+}
+
+/**
+ * Get all invite tokens for the current user's shift (Team Leaders only)
+ */
+export async function getInviteTokens(): Promise<InviteToken[]> {
+  const supabase = requireSupabaseClient();
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can view invite tokens');
+  }
+
+  // Fetch invite tokens with creator information
+  const { data, error } = await supabase
+    .from('invite_tokens')
+    .select(`
+      *,
+      creator:created_by (display_name)
+    `)
+    .eq('shift_id', currentUser.shiftId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []).map((token: any) => ({
+    id: token.id,
+    token: token.token,
+    shiftId: token.shift_id,
+    shiftName: currentUser.shiftName,
+    role: token.role,
+    createdBy: token.created_by,
+    createdByName: token.creator?.display_name || 'Unknown',
+    expiresAt: token.expires_at,
+    usedBy: token.used_by,
+    usedAt: token.used_at,
+    status: token.status,
+    metadata: token.metadata || {},
+    createdAt: token.created_at,
+  }));
+}
+
+/**
+ * Revoke an active invite token (Team Leaders only)
+ */
+export async function revokeInviteToken(tokenId: string): Promise<void> {
+  const supabase = requireSupabaseClient();
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can revoke invite tokens');
+  }
+
+  const { error } = await (supabase.from('invite_tokens').update as any)({
+    status: 'revoked',
+  })
+    .eq('id', tokenId)
+    .eq('shift_id', currentUser.shiftId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Validate an invite token (returns token details if valid)
+ */
+export async function validateInviteToken(token: string): Promise<InviteToken> {
+  const supabase = requireSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('invite_tokens')
+    .select(`
+      *,
+      shift:shift_id (name),
+      creator:created_by (display_name)
+    `)
+    .eq('token', token)
+    .single();
+
+  if (error || !data) {
+    throw new Error('Invalid invite token');
+  }
+
+  // Check if token is active
+  if (data.status !== 'active') {
+    throw new Error(`This invite token has been ${data.status}`);
+  }
+
+  // Check if token is expired
+  if (new Date(data.expires_at) < new Date()) {
+    // Mark as expired
+    await (supabase.from('invite_tokens').update as any)({ status: 'expired' })
+      .eq('id', data.id);
+    throw new Error('This invite token has expired');
+  }
+
+  return {
+    id: data.id,
+    token: data.token,
+    shiftId: data.shift_id,
+    shiftName: data.shift?.name || 'Unknown',
+    role: data.role,
+    createdBy: data.created_by,
+    createdByName: data.creator?.display_name || 'Unknown',
+    expiresAt: data.expires_at,
+    usedBy: data.used_by,
+    usedAt: data.used_at,
+    status: data.status,
+    metadata: data.metadata || {},
+    createdAt: data.created_at,
+  };
+}
+
+/**
+ * Accept an invite and create a new user account
+ */
+export async function acceptInvite(
+  token: string,
+  userCode: string,
+  displayName: string,
+  password: string
+): Promise<CloudUser> {
+  const supabase = requireSupabaseClient();
+
+  // Validate the invite token
+  const inviteToken = await validateInviteToken(token);
+
+  // Generate internal email for user code
+  const email = userCodeToEmail(userCode);
+
+  // Check if user code is already taken
+  const { data: existingUser } = await supabase
+    .from('users')
+    .select('user_code')
+    .eq('user_code', userCode)
+    .single();
+
+  if (existingUser) {
+    throw new Error('User code is already taken');
+  }
+
+  // Create auth user
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+
+  if (authError) {
+    throw new Error(authError.message);
+  }
+
+  if (!authData.user) {
+    throw new Error('Failed to create user account');
+  }
+
+  // Create user profile
+  const { error: profileError } = await supabase.from('users').insert({
+    id: authData.user.id,
+    user_code: userCode,
+    email: null, // User codes don't have real emails
+    display_name: displayName,
+    role: inviteToken.role,
+    shift_id: inviteToken.shiftId,
+    preferences: {},
+  });
+
+  if (profileError) {
+    // Rollback: delete auth user if profile creation fails
+    await supabase.auth.admin.deleteUser(authData.user.id);
+    throw new Error(`Failed to create user profile: ${profileError.message}`);
+  }
+
+  // Mark invite token as used
+  await (supabase.from('invite_tokens').update as any)({
+    status: 'used',
+    used_by: authData.user.id,
+    used_at: new Date().toISOString(),
+  }).eq('id', inviteToken.id);
+
+  // Return the newly created user (automatically signed in)
+  const newUser = await getCurrentUser();
+  if (!newUser) {
+    throw new Error('Failed to retrieve user after creation');
+  }
+
+  return newUser;
+}
