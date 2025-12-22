@@ -565,12 +565,12 @@ export async function deactivateUser(userId: string): Promise<void> {
   }
 
   // Can't deactivate users from different shifts
-  if (targetUser.shift_id !== currentUser.shiftId) {
+  if ((targetUser as any).shift_id !== currentUser.shiftId) {
     throw new Error('Cannot deactivate users from other shifts');
   }
 
   // Can't deactivate other Team Leaders
-  if (targetUser.role === 'Team Leader') {
+  if ((targetUser as any).role === 'Team Leader') {
     throw new Error('Cannot deactivate Team Leaders');
   }
 
@@ -653,9 +653,9 @@ export async function generateInviteToken(
   expiresAt.setHours(expiresAt.getHours() + expiresInHours);
 
   // Insert invite token
-  const { data, error } = await supabase
+  const { data, error } = await (supabase
     .from('invite_tokens')
-    .insert({
+    .insert as any)({
       token,
       shift_id: currentUser.shiftId,
       role,
@@ -707,8 +707,8 @@ export async function getInviteTokens(): Promise<InviteToken[]> {
   }
 
   // Fetch invite tokens with creator information
-  const { data, error } = await supabase
-    .from('invite_tokens')
+  const { data, error } = await (supabase
+    .from('invite_tokens') as any)
     .select(`
       *,
       creator:created_by (display_name)
@@ -769,8 +769,8 @@ export async function revokeInviteToken(tokenId: string): Promise<void> {
 export async function validateInviteToken(token: string): Promise<InviteToken> {
   const supabase = requireSupabaseClient();
 
-  const { data, error } = await supabase
-    .from('invite_tokens')
+  const { data, error } = await (supabase
+    .from('invite_tokens') as any)
     .select(`
       *,
       shift:shift_id (name),
@@ -856,7 +856,7 @@ export async function acceptInvite(
   }
 
   // Create user profile
-  const { error: profileError } = await supabase.from('users').insert({
+  const { error: profileError } = await (supabase.from('users').insert as any)({
     id: authData.user.id,
     user_code: userCode,
     email: null, // User codes don't have real emails
