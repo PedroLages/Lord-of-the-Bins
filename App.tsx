@@ -4281,17 +4281,35 @@ function App() {
                 theme={theme}
                 styles={styles}
                 onUpdateUser={async (updates) => {
-                  await updateProfile({
-                    displayName: updates.displayName,
-                    email: updates.email,
-                    preferences: updates.preferences,
-                  });
-                  // Refresh user data
-                  const refreshedUser = await getCurrentUser();
-                  if (refreshedUser) {
-                    setCurrentUser(refreshedUser);
+                  try {
+                    console.log('[Profile] Saving profile update...', {
+                      displayName: updates.displayName,
+                      hasEmail: !!updates.email,
+                      hasPreferences: !!updates.preferences,
+                      profilePictureSize: updates.preferences?.profilePicture ? Math.round(updates.preferences.profilePicture.length / 1024) + 'KB' : 'none',
+                    });
+
+                    await updateProfile({
+                      displayName: updates.displayName,
+                      email: updates.email,
+                      preferences: updates.preferences,
+                    });
+
+                    console.log('[Profile] Profile saved successfully');
+
+                    // Refresh user data
+                    const refreshedUser = await getCurrentUser();
+                    if (refreshedUser) {
+                      setCurrentUser(refreshedUser);
+                      console.log('[Profile] User data refreshed');
+                    }
+
+                    toast.success('Profile updated successfully');
+                  } catch (error) {
+                    console.error('[Profile] Failed to update profile:', error);
+                    toast.error(error instanceof Error ? error.message : 'Failed to update profile');
+                    throw error; // Re-throw so ProfileSettings can handle it
                   }
-                  toast.success('Profile updated successfully');
                 }}
                 onChangePassword={async (current, newPass) => {
                   await updatePassword(current, newPass);
@@ -4299,7 +4317,9 @@ function App() {
                 }}
                 onProcessPicture={async (file) => {
                   try {
-                    // Compress and resize image before upload
+                    console.log('[Profile] Processing image, size:', Math.round(file.size / 1024), 'KB');
+
+                    // Compress and resize image
                     const compressImage = (imgFile: File, maxSize: number = 256, quality: number = 0.8): Promise<string> => {
                       return new Promise((resolve, reject) => {
                         const reader = new FileReader();
@@ -4337,6 +4357,7 @@ function App() {
 
                             // Convert to compressed JPEG
                             const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                            console.log('[Profile] Compressed to:', Math.round(compressedBase64.length / 1024), 'KB');
                             resolve(compressedBase64);
                           };
                           img.onerror = () => reject(new Error('Failed to load image'));
@@ -4350,25 +4371,11 @@ function App() {
                     // Compress image to ~20-50KB (256x256, 80% quality)
                     const base64 = await compressImage(file, 256, 0.8);
 
-                    console.log('[Profile] Compressed image size:', Math.round(base64.length / 1024), 'KB');
-
-                    // Save to user preferences
-                    await updateProfile({
-                      preferences: {
-                        ...currentUser?.preferences,
-                        profilePicture: base64,
-                      },
-                    });
-
-                    // Refresh user data to show new picture
-                    const refreshedUser = await getCurrentUser();
-                    if (refreshedUser) {
-                      setCurrentUser(refreshedUser);
-                    }
-
+                    // Just return the base64 - don't save yet
+                    // Save happens when user clicks "Save Changes" button
                     return base64;
                   } catch (error) {
-                    console.error('Failed to upload profile picture:', error);
+                    console.error('[Profile] Failed to process image:', error);
                     throw error;
                   }
                 }}
