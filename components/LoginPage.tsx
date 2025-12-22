@@ -35,6 +35,17 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
   const [error, setError] = useState<string | null>(null);
   const [focusedField, setFocusedField] = useState<string | null>(null);
 
+  // Rate limiting state
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+
+  // Input validation helper
+  const isValidInput = (input: string): boolean => {
+    const userCodePattern = /^EMP\d{3}$/i;
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return userCodePattern.test(input) || emailPattern.test(input);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -43,14 +54,51 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
       return;
     }
 
+    // Validate input format
+    if (!isValidInput(username.trim())) {
+      setError('Please enter a valid user code (e.g., EMP001) or email address');
+      return;
+    }
+
+    // Check if user is locked out
+    if (lockoutUntil && Date.now() < lockoutUntil) {
+      const remainingSeconds = Math.ceil((lockoutUntil - Date.now()) / 1000);
+      setError(`Too many failed attempts. Please try again in ${remainingSeconds} seconds.`);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
       const user = await signIn(username, password);
+      // Reset failed attempts on success
+      setFailedAttempts(0);
+      setLockoutUntil(null);
       onLogin(user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      const newFailedAttempts = failedAttempts + 1;
+      setFailedAttempts(newFailedAttempts);
+
+      // Implement exponential backoff: 5s, 15s, 30s, 60s, 120s
+      if (newFailedAttempts >= 3) {
+        const lockoutDuration = Math.min(5 * Math.pow(3, newFailedAttempts - 3), 120) * 1000;
+        setLockoutUntil(Date.now() + lockoutDuration);
+        setError(`Too many failed attempts. Locked out for ${lockoutDuration / 1000} seconds.`);
+      } else {
+        // Provide specific error messages
+        const errorMessage = err instanceof Error ? err.message : 'Login failed';
+        if (errorMessage.includes('Invalid login credentials') || errorMessage.includes('Invalid')) {
+          setError('Invalid user code/email or password. Please try again.');
+        } else if (errorMessage.includes('network') || errorMessage.includes('Network')) {
+          setError('Network error. Please check your internet connection.');
+        } else if (errorMessage.includes('Supabase') || errorMessage.includes('configured')) {
+          setError('Authentication service not available. Please contact support.');
+        } else {
+          setError(errorMessage);
+        }
+      }
+
       setIsLoading(false);
     }
   };

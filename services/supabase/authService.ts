@@ -62,8 +62,7 @@ export async function signIn(
   const email = isEmail(identifier) ? identifier : userCodeToEmail(identifier);
 
   if (!supabase) {
-    // Try offline login with cached credentials
-    return signInOffline(identifier, password);
+    throw new Error('Supabase is not configured. Please check your environment variables.');
   }
 
   try {
@@ -118,37 +117,8 @@ export async function signIn(
 
     return user;
   } catch (error) {
-    // If network error, try offline login
-    if (error instanceof Error && error.message.includes('network')) {
-      return signInOffline(identifier, password);
-    }
     throw error;
   }
-}
-
-/**
- * Sign in using cached credentials (offline mode)
- */
-async function signInOffline(identifier: string, password: string): Promise<CloudUser> {
-  const cached = getCachedSession();
-
-  if (!cached || !cached.user) {
-    throw new Error('No cached session. Please connect to the internet to sign in.');
-  }
-
-  // Verify the identifier matches
-  const matchesUserCode = cached.user.userCode.toLowerCase() === identifier.toLowerCase();
-  const matchesEmail = cached.user.email?.toLowerCase() === identifier.toLowerCase();
-
-  if (!matchesUserCode && !matchesEmail) {
-    throw new Error('Cached session is for a different user');
-  }
-
-  // Note: We can't verify the password offline without storing it (security risk)
-  // Just return the cached user
-  console.log('[Auth] Using cached session (offline mode)');
-
-  return cached.user;
 }
 
 /**
@@ -308,13 +278,27 @@ export function onAuthStateChange(
 /**
  * Update user password
  */
-export async function updatePassword(newPassword: string): Promise<void> {
-  const supabase = getSupabaseClient();
+export async function updatePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const supabase = requireSupabaseClient();
 
-  if (!supabase) {
-    throw new Error('Cannot update password in offline mode');
+  // Get current user
+  const { data: { user: authUser } } = await supabase.auth.getUser();
+
+  if (!authUser || !authUser.email) {
+    throw new Error('Not authenticated');
   }
 
+  // Verify current password by attempting to sign in
+  const { error: verifyError } = await supabase.auth.signInWithPassword({
+    email: authUser.email,
+    password: currentPassword,
+  });
+
+  if (verifyError) {
+    throw new Error('Current password is incorrect');
+  }
+
+  // Update to new password
   const { error } = await supabase.auth.updateUser({
     password: newPassword,
   });
@@ -340,18 +324,14 @@ export async function updateProfile(updates: {
     throw new Error('Not authenticated');
   }
 
-  // Type the update data for better type safety
-  const updateData: UpdateTables<'users'> = {
-    display_name: updates.displayName,
-    email: updates.email,
-    preferences: updates.preferences,
-  };
+  // Build update data with only provided fields
+  const updateData: Record<string, any> = {};
+  if (updates.displayName !== undefined) updateData.display_name = updates.displayName;
+  if (updates.email !== undefined) updateData.email = updates.email;
+  if (updates.preferences !== undefined) updateData.preferences = updates.preferences;
 
-  // Cast client to any to work around Supabase type inference limitations
-  const { error } = await (supabase as any)
-    .from('users')
-    .update(updateData)
-    .eq('id', authUser.id);
+  // Type assertion needed due to Supabase generated type limitations
+  const { error } = await (supabase.from('users').update as any)(updateData).eq('id', authUser.id);
 
   if (error) {
     throw new Error(error.message);

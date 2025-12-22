@@ -2,7 +2,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Sidebar from './components/Sidebar';
-import SetupPage from './components/SetupPage';
 import LoginPage from './components/LoginPage';
 import {
   Users, Calendar, Sparkles, AlertCircle, Save, Download,
@@ -125,7 +124,6 @@ function App() {
 
   // Auth state
   const [authChecking, setAuthChecking] = useState(true);
-  const [needsSetup, setNeedsSetup] = useState(false);
   const [currentUser, setCurrentUser] = useState<CloudUser | null>(null);
 
   // Toast system
@@ -310,7 +308,10 @@ function App() {
           setCurrentUser(user);
           // Apply user's theme preference
           if (user.preferences?.theme) {
-            setTheme(user.preferences.theme as Theme);
+            const validThemes: Theme[] = ['Modern', 'Midnight'];
+            if (validThemes.includes(user.preferences.theme as Theme)) {
+              setTheme(user.preferences.theme as Theme);
+            }
           }
         }
       } catch (err) {
@@ -339,13 +340,6 @@ function App() {
     setCurrentUser(null);
     toast.info('Signed out successfully');
   }, [toast]);
-
-  // Handle setup complete
-  const handleSetupComplete = useCallback(async () => {
-    setNeedsSetup(false);
-    // After setup, user should now log in
-    setAuthChecking(false);
-  }, []);
 
   // Handle login
   const handleLogin = useCallback((user: CloudUser) => {
@@ -4211,8 +4205,7 @@ function App() {
                   toast.success('Profile updated successfully');
                 }}
                 onChangePassword={async (current, newPass) => {
-                  // Supabase doesn't verify current password, it just updates
-                  await updatePassword(newPass);
+                  await updatePassword(current, newPass);
                   toast.success('Password updated successfully');
                 }}
                 onProcessPicture={async (file) => {
