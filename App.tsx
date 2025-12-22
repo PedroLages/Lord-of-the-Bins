@@ -26,6 +26,7 @@ import {
   type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
 import { getCurrentUser, getCachedUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
+import { hybridStorage } from './services/storage';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
@@ -308,6 +309,9 @@ function App() {
           setCurrentUser(cachedUser);
           setAuthChecking(false); // Show UI immediately with cached data
 
+          // Initialize hybrid storage with user's shift
+          hybridStorage.setShiftId(cachedUser.shiftId);
+
           // Apply cached theme preference
           if (cachedUser.preferences?.theme) {
             const validThemes: Theme[] = ['Modern', 'Midnight'];
@@ -321,6 +325,10 @@ function App() {
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
+
+          // Initialize hybrid storage with user's shift
+          hybridStorage.setShiftId(user.shiftId);
+
           // Update theme if it changed
           if (user.preferences?.theme) {
             const validThemes: Theme[] = ['Modern', 'Midnight'];
@@ -343,6 +351,10 @@ function App() {
     // Listen for auth state changes
     const unsubscribe = onAuthStateChange((user) => {
       setCurrentUser(user);
+      if (user) {
+        // Initialize hybrid storage when user logs in
+        hybridStorage.setShiftId(user.shiftId);
+      }
       if (user?.preferences?.theme) {
         setTheme(user.preferences.theme as Theme);
       }
@@ -361,6 +373,8 @@ function App() {
   // Handle login
   const handleLogin = useCallback((user: CloudUser) => {
     setCurrentUser(user);
+    // Initialize hybrid storage with user's shift
+    hybridStorage.setShiftId(user.shiftId);
     if (user.preferences?.theme) {
       setTheme(user.preferences.theme as Theme);
     }
