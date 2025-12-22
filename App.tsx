@@ -319,27 +319,38 @@ function App() {
               setTheme(cachedUser.preferences.theme as Theme);
             }
           }
+
+          // Refresh from Supabase in background (non-blocking) - don't await
+          getCurrentUser().then(user => {
+            if (user) {
+              setCurrentUser(user);
+              if (user.preferences?.theme) {
+                const validThemes: Theme[] = ['Modern', 'Midnight'];
+                if (validThemes.includes(user.preferences.theme as Theme)) {
+                  setTheme(user.preferences.theme as Theme);
+                }
+              }
+            }
+          }).catch(err => console.warn('Background auth refresh failed:', err));
+
+          return; // Exit early - UI is already shown
         }
 
-        // Then refresh from Supabase in background (non-blocking)
+        // No cached user - must wait for Supabase check
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
-
-          // Initialize hybrid storage with user's shift
           hybridStorage.setShiftId(user.shiftId);
 
-          // Update theme if it changed
           if (user.preferences?.theme) {
             const validThemes: Theme[] = ['Modern', 'Midnight'];
             if (validThemes.includes(user.preferences.theme as Theme)) {
               setTheme(user.preferences.theme as Theme);
             }
           }
-        } else if (!cachedUser) {
-          // No cached user and no valid session - show login
-          setAuthChecking(false);
         }
+        // Always set authChecking to false after check completes
+        setAuthChecking(false);
       } catch (err) {
         console.error('Auth check failed:', err);
         setAuthChecking(false);
