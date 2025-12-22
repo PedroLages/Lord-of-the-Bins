@@ -4289,6 +4289,7 @@ function App() {
                       profilePictureSize: updates.preferences?.profilePicture ? Math.round(updates.preferences.profilePicture.length / 1024) + 'KB' : 'none',
                     });
 
+                    // Save to Supabase
                     await updateProfile({
                       displayName: updates.displayName,
                       email: updates.email,
@@ -4297,9 +4298,10 @@ function App() {
 
                     console.log('[Profile] Profile saved successfully');
 
-                    // Refresh user data
+                    // Refresh user data in a single state update
                     const refreshedUser = await getCurrentUser();
                     if (refreshedUser) {
+                      // Batch state update - prevents multiple re-renders
                       setCurrentUser(refreshedUser);
                       console.log('[Profile] User data refreshed');
                     }
@@ -4370,6 +4372,12 @@ function App() {
 
                     // Compress image to ~20-50KB (256x256, 80% quality)
                     const base64 = await compressImage(file, 256, 0.8);
+
+                    // Validate compressed size (max 100KB to prevent storage issues)
+                    const sizeInKB = Math.round(base64.length / 1024);
+                    if (sizeInKB > 100) {
+                      throw new Error(`Compressed image too large (${sizeInKB}KB). Please use a smaller image.`);
+                    }
 
                     // Just return the base64 - don't save yet
                     // Save happens when user clicks "Save Changes" button
