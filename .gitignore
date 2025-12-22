@@ -40,3 +40,7 @@ Screenshot*.png
 
 # PDF exports
 *.pdf
+.vercel
+
+# Supabase temporary files
+supabase/.temp/
