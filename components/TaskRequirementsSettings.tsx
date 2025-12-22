@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Plus, Trash2, Users, UserCheck, AlertCircle, Sparkles, TrendingUp, Calendar } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trash2, Users, UserCheck, Sparkles, TrendingUp, Calendar } from 'lucide-react';
 import type { TaskType, TaskRequirement, OperatorTypeRequirement, OperatorTypeOption, WeekDay } from '../types';
 import { getTotalFromRequirements, getRequirementsForDay, TC_SKILLS } from '../types';
 
@@ -652,46 +652,6 @@ const TaskRequirementsSettings: React.FC<TaskRequirementsSettingsProps> = ({
         </div>
       )}
 
-      {/* Help Section - Enhanced */}
-      <div className={`p-6 rounded-2xl border-2 ${
-        isDark
-          ? 'bg-gradient-to-br from-indigo-900/20 to-indigo-800/10 border-indigo-700/50'
-          : 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200'
-      }`}>
-        <div className="flex items-start gap-4">
-          <div className={`p-3 rounded-xl ${
-            isDark ? 'bg-indigo-500/20 text-indigo-400' : 'bg-blue-200 text-blue-700'
-          }`}>
-            <AlertCircle className="h-6 w-6" />
-          </div>
-          <div className="flex-1">
-            <h3 className={`font-bold text-base mb-3 ${isDark ? 'text-indigo-300' : 'text-blue-900'}`}>
-              How Requirements Work
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {[
-                { label: 'Ceva', desc: 'Must be a Ceva (full-time) operator' },
-                { label: 'Flex', desc: 'Must be a Flex (part-time) operator' },
-                { label: 'Coordinator', desc: 'Must be a Team Coordinator (TC)' },
-              ].map((type, i) => (
-                <div key={i} className={`flex items-start gap-2 text-xs ${isDark ? 'text-slate-300' : 'text-blue-800'}`}>
-                  <span className={`font-bold px-2 py-0.5 rounded ${
-                    isDark ? 'bg-slate-800 text-indigo-400' : 'bg-blue-200 text-blue-900'
-                  }`}>
-                    {type.label}:
-                  </span>
-                  <span>{type.desc}</span>
-                </div>
-              ))}
-            </div>
-            <div className={`mt-4 pt-4 border-t ${isDark ? 'border-indigo-700/30' : 'border-blue-200'}`}>
-              <p className={`text-xs ${isDark ? 'text-indigo-300' : 'text-blue-800'}`}>
-                <strong>Example:</strong> Setting "2 Flex + 1 Ceva" means Smart Fill will assign 2 Flex operators and 1 Ceva operator to this task each day.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

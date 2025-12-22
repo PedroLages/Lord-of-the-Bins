@@ -25,7 +25,8 @@ import {
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
   type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
-import { getCurrentUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
+import { getCurrentUser, getCachedUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
+import { hybridStorage } from './services/storage';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
@@ -33,6 +34,7 @@ import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
+import ShiftManagementSettings from './components/ShiftManagementSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -302,11 +304,45 @@ function App() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Check if user is logged in
+        // OPTIMIZATION: Check cached session first for instant load
+        const cachedUser = getCachedUser();
+        if (cachedUser) {
+          setCurrentUser(cachedUser);
+          setAuthChecking(false); // Show UI immediately with cached data
+
+          // Initialize hybrid storage with user's shift
+          hybridStorage.setShiftId(cachedUser.shiftId);
+
+          // Apply cached theme preference
+          if (cachedUser.preferences?.theme) {
+            const validThemes: Theme[] = ['Modern', 'Midnight'];
+            if (validThemes.includes(cachedUser.preferences.theme as Theme)) {
+              setTheme(cachedUser.preferences.theme as Theme);
+            }
+          }
+
+          // Refresh from Supabase in background (non-blocking) - don't await
+          getCurrentUser().then(user => {
+            if (user) {
+              setCurrentUser(user);
+              if (user.preferences?.theme) {
+                const validThemes: Theme[] = ['Modern', 'Midnight'];
+                if (validThemes.includes(user.preferences.theme as Theme)) {
+                  setTheme(user.preferences.theme as Theme);
+                }
+              }
+            }
+          }).catch(err => console.warn('Background auth refresh failed:', err));
+
+          return; // Exit early - UI is already shown
+        }
+
+        // No cached user - must wait for Supabase check
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
-          // Apply user's theme preference
+          hybridStorage.setShiftId(user.shiftId);
+
           if (user.preferences?.theme) {
             const validThemes: Theme[] = ['Modern', 'Midnight'];
             if (validThemes.includes(user.preferences.theme as Theme)) {
@@ -314,9 +350,10 @@ function App() {
             }
           }
         }
+        // Always set authChecking to false after check completes
+        setAuthChecking(false);
       } catch (err) {
         console.error('Auth check failed:', err);
-      } finally {
         setAuthChecking(false);
       }
     };
@@ -326,6 +363,10 @@ function App() {
     // Listen for auth state changes
     const unsubscribe = onAuthStateChange((user) => {
       setCurrentUser(user);
+      if (user) {
+        // Initialize hybrid storage when user logs in
+        hybridStorage.setShiftId(user.shiftId);
+      }
       if (user?.preferences?.theme) {
         setTheme(user.preferences.theme as Theme);
       }
@@ -336,14 +377,30 @@ function App() {
 
   // Handle sign out
   const handleSignOut = useCallback(async () => {
-    await signOut();
-    setCurrentUser(null);
-    toast.info('Signed out successfully');
+    try {
+      await signOut();
+      setCurrentUser(null);
+
+      // Clear hybrid storage shift context
+      hybridStorage.setShiftId('');
+
+      toast.success('Signed out successfully');
+
+      // Force page reload to clear all state
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error) {
+      console.error('Sign out error:', error);
+      toast.error('Failed to sign out');
+    }
   }, [toast]);
 
   // Handle login
   const handleLogin = useCallback((user: CloudUser) => {
     setCurrentUser(user);
+    // Initialize hybrid storage with user's shift
+    hybridStorage.setShiftId(user.shiftId);
     if (user.preferences?.theme) {
       setTheme(user.preferences.theme as Theme);
     }
@@ -351,7 +408,7 @@ function App() {
   }, [toast]);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile'>('appearance');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'shifts'>('appearance');
 
   // Active color palette (computed from appearance settings)
   const activePalette = useMemo(() => {
@@ -3931,6 +3988,7 @@ function App() {
            </div>
            {[
              { id: 'profile', label: 'My Profile', icon: User },
+             { id: 'shifts', label: 'Shift Management', icon: Repeat },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
            ].map((item) => (
              <button
@@ -3992,9 +4050,24 @@ function App() {
                     <h3 className={`text-lg font-semibold ${styles.text}`}>App Theme</h3>
                     <div className="grid grid-cols-2 gap-4 max-w-md">
                        <button
-                          onClick={() => {
+                          onClick={async () => {
                              setTheme('Modern');
                              saveSettings('Modern', schedulingRules, skills);
+
+                             // Save theme to Supabase user preferences
+                             if (currentUser) {
+                               try {
+                                 await updateProfile({
+                                   preferences: {
+                                     ...currentUser.preferences,
+                                     theme: 'Modern',
+                                   },
+                                 });
+                               } catch (err) {
+                                 console.warn('Failed to sync theme to cloud:', err);
+                               }
+                             }
+
                              toast.success('Theme changed to Modern');
                           }}
                           className={`relative p-4 rounded-xl border-2 transition-all ${
@@ -4022,9 +4095,24 @@ function App() {
                        </button>
 
                        <button
-                          onClick={() => {
+                          onClick={async () => {
                              setTheme('Midnight');
                              saveSettings('Midnight', schedulingRules, skills);
+
+                             // Save theme to Supabase user preferences
+                             if (currentUser) {
+                               try {
+                                 await updateProfile({
+                                   preferences: {
+                                     ...currentUser.preferences,
+                                     theme: 'Midnight',
+                                   },
+                                 });
+                               } catch (err) {
+                                 console.warn('Failed to sync theme to cloud:', err);
+                               }
+                             }
+
                              toast.success('Theme changed to Midnight');
                           }}
                           className={`relative p-4 rounded-xl border-2 transition-all ${
@@ -4193,26 +4281,113 @@ function App() {
                 theme={theme}
                 styles={styles}
                 onUpdateUser={async (updates) => {
-                  await updateProfile({
-                    displayName: updates.displayName,
-                    email: updates.email,
-                  });
-                  // Refresh user data
-                  const refreshedUser = await getCurrentUser();
-                  if (refreshedUser) {
-                    setCurrentUser(refreshedUser);
+                  try {
+                    console.log('[Profile] Saving profile update...', {
+                      displayName: updates.displayName,
+                      hasEmail: !!updates.email,
+                      hasPreferences: !!updates.preferences,
+                      profilePictureSize: updates.preferences?.profilePicture ? Math.round(updates.preferences.profilePicture.length / 1024) + 'KB' : 'none',
+                    });
+
+                    await updateProfile({
+                      displayName: updates.displayName,
+                      email: updates.email,
+                      preferences: updates.preferences,
+                    });
+
+                    console.log('[Profile] Profile saved successfully');
+
+                    // Refresh user data
+                    const refreshedUser = await getCurrentUser();
+                    if (refreshedUser) {
+                      setCurrentUser(refreshedUser);
+                      console.log('[Profile] User data refreshed');
+                    }
+
+                    toast.success('Profile updated successfully');
+                  } catch (error) {
+                    console.error('[Profile] Failed to update profile:', error);
+                    toast.error(error instanceof Error ? error.message : 'Failed to update profile');
+                    throw error; // Re-throw so ProfileSettings can handle it
                   }
-                  toast.success('Profile updated successfully');
                 }}
                 onChangePassword={async (current, newPass) => {
                   await updatePassword(current, newPass);
                   toast.success('Password updated successfully');
                 }}
                 onProcessPicture={async (file) => {
-                  // Profile picture upload not yet implemented in Supabase
-                  toast.info('Profile picture upload coming soon');
-                  return '';
+                  try {
+                    console.log('[Profile] Processing image, size:', Math.round(file.size / 1024), 'KB');
+
+                    // Compress and resize image
+                    const compressImage = (imgFile: File, maxSize: number = 256, quality: number = 0.8): Promise<string> => {
+                      return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                          const img = new Image();
+                          img.onload = () => {
+                            // Create canvas for resizing
+                            const canvas = document.createElement('canvas');
+                            let width = img.width;
+                            let height = img.height;
+
+                            // Calculate new dimensions (max 256x256 for profile pics)
+                            if (width > height) {
+                              if (width > maxSize) {
+                                height = Math.round((height * maxSize) / width);
+                                width = maxSize;
+                              }
+                            } else {
+                              if (height > maxSize) {
+                                width = Math.round((width * maxSize) / height);
+                                height = maxSize;
+                              }
+                            }
+
+                            canvas.width = width;
+                            canvas.height = height;
+
+                            // Draw and compress
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx) {
+                              reject(new Error('Failed to get canvas context'));
+                              return;
+                            }
+                            ctx.drawImage(img, 0, 0, width, height);
+
+                            // Convert to compressed JPEG
+                            const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                            console.log('[Profile] Compressed to:', Math.round(compressedBase64.length / 1024), 'KB');
+                            resolve(compressedBase64);
+                          };
+                          img.onerror = () => reject(new Error('Failed to load image'));
+                          img.src = e.target?.result as string;
+                        };
+                        reader.onerror = () => reject(new Error('Failed to read file'));
+                        reader.readAsDataURL(imgFile);
+                      });
+                    };
+
+                    // Compress image to ~20-50KB (256x256, 80% quality)
+                    const base64 = await compressImage(file, 256, 0.8);
+
+                    // Just return the base64 - don't save yet
+                    // Save happens when user clicks "Save Changes" button
+                    return base64;
+                  } catch (error) {
+                    console.error('[Profile] Failed to process image:', error);
+                    throw error;
+                  }
                 }}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'shifts' && currentUser && (
+              <ShiftManagementSettings
+                user={currentUser}
+                theme={theme}
+                styles={styles}
                 toast={toast}
               />
            )}

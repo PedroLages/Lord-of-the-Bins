@@ -336,6 +336,18 @@ export async function updateProfile(updates: {
   if (error) {
     throw new Error(error.message);
   }
+
+  // Refresh the cached session with updated user data
+  try {
+    const updatedUser = await getCurrentUser();
+    if (updatedUser) {
+      const { data: { session } } = await supabase.auth.getSession();
+      cacheSession(session, updatedUser);
+    }
+  } catch (cacheError) {
+    console.warn('[Auth] Failed to update cache after profile update:', cacheError);
+    // Don't throw - the update succeeded, cache refresh is secondary
+  }
 }
 
 // ============================================
@@ -396,6 +408,15 @@ function clearCachedSession(): void {
 // ============================================
 
 /**
+ * Get cached user for instant load (no network calls)
+ * Returns null if no cached user or cache expired
+ */
+export function getCachedUser(): CloudUser | null {
+  const cached = getCachedSession();
+  return cached?.user || null;
+}
+
+/**
  * Check if Supabase auth is available
  */
 export function isCloudAuthAvailable(): boolean {
@@ -423,4 +444,31 @@ export async function getShifts(): Promise<{ id: string; name: string }[]> {
   }
 
   return data || [];
+}
+
+/**
+ * Update shift name (Team Leaders only)
+ */
+export async function updateShiftName(shiftId: string, newName: string): Promise<void> {
+  const supabase = requireSupabaseClient();
+
+  // Validate input
+  if (!newName.trim()) {
+    throw new Error('Shift name cannot be empty');
+  }
+
+  if (newName.length > 50) {
+    throw new Error('Shift name must be 50 characters or less');
+  }
+
+  // Update shift name
+  // Type assertion needed due to Supabase generated type limitations
+  const { error } = await (supabase.from('shifts').update as any)({ name: newName.trim() }).eq('id', shiftId);
+
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error('A shift with this name already exists');
+    }
+    throw new Error(error.message);
+  }
 }
