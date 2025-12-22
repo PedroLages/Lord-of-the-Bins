@@ -20,6 +20,11 @@ export interface CloudUser {
   role: 'Team Leader' | 'TC';
   shiftId: string;
   shiftName: string;
+  preferences?: {
+    theme?: string;
+    colorPalette?: string;
+    profilePicture?: string;
+  };
 }
 
 // Internal email domain for user code authentication
@@ -105,6 +110,7 @@ export async function signIn(
       role: profile.role,
       shiftId: profile.shift_id,
       shiftName: profile.shifts?.name || 'Unknown Shift',
+      preferences: profile.preferences as any,
     };
 
     // Cache session and user for offline access
@@ -200,6 +206,7 @@ export async function signUp(
     role,
     shiftId,
     shiftName: 'Pending', // Will be fetched on next login
+    preferences: {},
   };
 }
 
@@ -262,6 +269,7 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     role: profile.role,
     shiftId: profile.shift_id,
     shiftName: profile.shifts?.name || 'Unknown Shift',
+    preferences: profile.preferences as any,
   };
 }
 
@@ -322,6 +330,7 @@ export async function updatePassword(newPassword: string): Promise<void> {
 export async function updateProfile(updates: {
   displayName?: string;
   email?: string;
+  preferences?: any;
 }): Promise<void> {
   const supabase = requireSupabaseClient();
 
@@ -335,6 +344,7 @@ export async function updateProfile(updates: {
   const updateData: UpdateTables<'users'> = {
     display_name: updates.displayName,
     email: updates.email,
+    preferences: updates.preferences,
   };
 
   // Cast client to any to work around Supabase type inference limitations
