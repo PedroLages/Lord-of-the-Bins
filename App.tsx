@@ -377,9 +377,23 @@ function App() {
 
   // Handle sign out
   const handleSignOut = useCallback(async () => {
-    await signOut();
-    setCurrentUser(null);
-    toast.info('Signed out successfully');
+    try {
+      await signOut();
+      setCurrentUser(null);
+
+      // Clear hybrid storage shift context
+      hybridStorage.setShiftId('');
+
+      toast.success('Signed out successfully');
+
+      // Force page reload to clear all state
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error) {
+      console.error('Sign out error:', error);
+      toast.error('Failed to sign out');
+    }
   }, [toast]);
 
   // Handle login
