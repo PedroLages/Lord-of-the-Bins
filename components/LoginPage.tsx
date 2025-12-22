@@ -18,9 +18,12 @@ import {
   AlertCircle,
   Package,
   Boxes,
+  Key,
+  CheckCircle,
 } from 'lucide-react';
 import { signIn, type CloudUser } from '../services/supabase/authService';
 import { isSupabaseConfigured } from '../services/supabase/client';
+import { requireSupabaseClient } from '../services/supabase/client';
 
 interface LoginPageProps {
   onLogin: (user: CloudUser) => void;
@@ -39,11 +42,89 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
 
+  // Password change state
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
+  const [loggedInUser, setLoggedInUser] = useState<CloudUser | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+
   // Input validation helper
   const isValidInput = (input: string): boolean => {
     const userCodePattern = /^EMP\d{3}$/i;
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return userCodePattern.test(input) || emailPattern.test(input);
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!newPassword || !confirmPassword) {
+      setPasswordChangeError('Please enter and confirm your new password');
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordChangeError('Password must be at least 4 characters');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordChangeError('Passwords do not match');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    setPasswordChangeError(null);
+
+    try {
+      const supabase = requireSupabaseClient();
+
+      // Update password in Supabase Auth
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (updateError) throw updateError;
+
+      // Clear temporary password and flag from user preferences
+      const { error: prefError } = await (supabase.from('users').update as any)({
+        preferences: {
+          ...(loggedInUser?.preferences || {}),
+          temporaryPassword: null,
+          passwordResetBy: null,
+          passwordResetAt: null,
+          mustChangePassword: false,
+        },
+      }).eq('id', loggedInUser?.id);
+
+      if (prefError) {
+        console.error('Failed to update preferences:', prefError);
+        // Continue anyway since password was changed
+      }
+
+      // Update local user object and proceed with login
+      if (loggedInUser) {
+        const updatedUser = {
+          ...loggedInUser,
+          preferences: {
+            ...loggedInUser.preferences,
+            temporaryPassword: null,
+            passwordResetBy: null,
+            passwordResetAt: null,
+            mustChangePassword: false,
+          },
+        };
+        onLogin(updatedUser);
+      }
+    } catch (err) {
+      console.error('Password change error:', err);
+      setPasswordChangeError(err instanceof Error ? err.message : 'Failed to change password');
+      setIsChangingPassword(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -75,7 +156,15 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
       // Reset failed attempts on success
       setFailedAttempts(0);
       setLockoutUntil(null);
-      onLogin(user);
+
+      // Check if user needs to change password
+      if (user.preferences?.mustChangePassword) {
+        setLoggedInUser(user);
+        setShowPasswordChangeModal(true);
+        setIsLoading(false);
+      } else {
+        onLogin(user);
+      }
     } catch (err) {
       const newFailedAttempts = failedAttempts + 1;
       setFailedAttempts(newFailedAttempts);
@@ -337,6 +426,137 @@ export default function LoginPage({ onLogin, onSwitchToSetup }: LoginPageProps) 
           </div>
         </div>
       </div>
+
+      {/* Password Change Modal */}
+      {showPasswordChangeModal && loggedInUser && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-xl shadow-2xl">
+            {/* Header */}
+            <div className="p-6 border-b border-slate-800">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 rounded-lg bg-amber-500/20">
+                  <Key className="w-5 h-5 text-amber-400" />
+                </div>
+                <h3 className="text-lg font-bold text-white">
+                  Password Change Required
+                </h3>
+              </div>
+              <p className="text-sm text-slate-400">
+                Your Team Leader reset your password. Please choose a new password to continue.
+              </p>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handlePasswordChange} className="p-6 space-y-4">
+              {/* User Info */}
+              <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                <p className="text-xs text-slate-500 mb-1">Logged in as:</p>
+                <p className="text-sm font-semibold text-white">
+                  {loggedInUser.displayName}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {loggedInUser.userCode}
+                </p>
+              </div>
+
+              {/* New Password */}
+              <div>
+                <label className="block text-sm font-medium text-slate-400 mb-2">
+                  New Password
+                </label>
+                <div className="relative">
+                  <div className="absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center border-r border-slate-700 bg-slate-800/50 rounded-l-lg">
+                    <Lock className="w-4 h-4 text-slate-500" />
+                  </div>
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      setPasswordChangeError(null);
+                    }}
+                    placeholder="Enter new password"
+                    autoFocus
+                    className="w-full pl-14 pr-12 py-3 bg-slate-900 border border-slate-800 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    tabIndex={-1}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors p-1"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm Password */}
+              <div>
+                <label className="block text-sm font-medium text-slate-400 mb-2">
+                  Confirm New Password
+                </label>
+                <div className="relative">
+                  <div className="absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center border-r border-slate-700 bg-slate-800/50 rounded-l-lg">
+                    <Lock className="w-4 h-4 text-slate-500" />
+                  </div>
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      setPasswordChangeError(null);
+                    }}
+                    placeholder="Confirm new password"
+                    className="w-full pl-14 pr-12 py-3 bg-slate-900 border border-slate-800 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    tabIndex={-1}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors p-1"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Password Requirements */}
+              <div className="p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
+                <p className="text-xs text-indigo-400">
+                  Password must be at least 4 characters long
+                </p>
+              </div>
+
+              {/* Error Message */}
+              {passwordChangeError && (
+                <div className="flex items-center gap-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  <p className="text-sm text-red-400">{passwordChangeError}</p>
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isChangingPassword}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-all"
+              >
+                {isChangingPassword ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Updating Password...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-5 h-5" />
+                    <span>Update Password & Continue</span>
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

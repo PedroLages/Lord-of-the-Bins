@@ -21,8 +21,11 @@ import {
   Hash,
   Loader2,
   AlertCircle,
+  Key,
+  Copy,
+  X,
 } from 'lucide-react';
-import { getTeamMembers, deactivateUser, reactivateUser } from '../services/supabase/authService';
+import { getTeamMembers, deactivateUser, reactivateUser, generateTemporaryPassword } from '../services/supabase/authService';
 import type { CloudUser } from '../services/supabase/authService';
 import { getInitials } from '../types';
 
@@ -64,6 +67,12 @@ export default function UserManagementSettings({
   const [showDeactivated, setShowDeactivated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [actioningUserId, setActioningUserId] = useState<string | null>(null);
+  const [resetPasswordModal, setResetPasswordModal] = useState<{
+    show: boolean;
+    userCode: string;
+    userName: string;
+    temporaryPassword: string;
+  } | null>(null);
 
   // Load team members on mount
   useEffect(() => {
@@ -141,6 +150,37 @@ export default function UserManagementSettings({
     } finally {
       setActioningUserId(null);
     }
+  };
+
+  const handleResetPassword = async (userId: string, userName: string) => {
+    if (!confirm(`Reset password for ${userName}?\n\nA temporary password will be generated. You'll need to write it down and give it to them in person.`)) {
+      return;
+    }
+
+    setActioningUserId(userId);
+    try {
+      const { temporaryPassword, userCode } = await generateTemporaryPassword(userId);
+
+      // Show modal with temporary password
+      setResetPasswordModal({
+        show: true,
+        userCode,
+        userName,
+        temporaryPassword,
+      });
+
+      toast.success(`Temporary password generated for ${userName}`);
+    } catch (error) {
+      console.error('[UserManagement] Failed to reset password:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to reset password');
+    } finally {
+      setActioningUserId(null);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Copied to clipboard');
   };
 
   const formatDate = (dateString: string) => {
@@ -409,7 +449,7 @@ export default function UserManagementSettings({
 
                 {/* Actions (Team Leaders only) */}
                 {canDeactivate && (
-                  <div className="pt-3 border-t border-gray-200 dark:border-slate-700">
+                  <div className="pt-3 border-t border-gray-200 dark:border-slate-700 space-y-2">
                     {isDeactivated ? (
                       <button
                         onClick={() => handleReactivate(member.id, member.displayName)}
@@ -433,33 +473,182 @@ export default function UserManagementSettings({
                         )}
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleDeactivate(member.id, member.displayName)}
-                        disabled={actioningUserId === member.id}
-                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                          theme === 'Midnight'
-                            ? 'bg-red-600 hover:bg-red-500 text-white'
-                            : 'bg-red-600 hover:bg-red-700 text-white'
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        {actioningUserId === member.id ? (
-                          <>
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Deactivating...
-                          </>
-                        ) : (
-                          <>
-                            <UserMinus className="w-3 h-3" />
-                            Deactivate
-                          </>
-                        )}
-                      </button>
+                      <>
+                        {/* Reset Password Button */}
+                        <button
+                          onClick={() => handleResetPassword(member.id, member.displayName)}
+                          disabled={actioningUserId === member.id}
+                          className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                            theme === 'Midnight'
+                              ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                              : 'bg-amber-600 hover:bg-amber-700 text-white'
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        >
+                          {actioningUserId === member.id ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Resetting...
+                            </>
+                          ) : (
+                            <>
+                              <Key className="w-3 h-3" />
+                              Reset Password
+                            </>
+                          )}
+                        </button>
+
+                        {/* Deactivate Button */}
+                        <button
+                          onClick={() => handleDeactivate(member.id, member.displayName)}
+                          disabled={actioningUserId === member.id}
+                          className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                            theme === 'Midnight'
+                              ? 'bg-red-600 hover:bg-red-500 text-white'
+                              : 'bg-red-600 hover:bg-red-700 text-white'
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        >
+                          {actioningUserId === member.id ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Deactivating...
+                            </>
+                          ) : (
+                            <>
+                              <UserMinus className="w-3 h-3" />
+                              Deactivate
+                            </>
+                          )}
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Password Reset Modal */}
+      {resetPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div
+            className={`max-w-md w-full rounded-xl border shadow-2xl ${
+              theme === 'Midnight'
+                ? 'bg-slate-800 border-slate-700'
+                : 'bg-white border-gray-200'
+            }`}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2 rounded-lg ${
+                    theme === 'Midnight' ? 'bg-amber-500/20' : 'bg-amber-100'
+                  }`}
+                >
+                  <Key
+                    className={`w-5 h-5 ${
+                      theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                    }`}
+                  />
+                </div>
+                <h3 className={`text-lg font-bold ${styles.text}`}>
+                  Temporary Password Generated
+                </h3>
+              </div>
+              <button
+                onClick={() => setResetPasswordModal(null)}
+                className={`p-1 rounded-lg transition-colors ${
+                  theme === 'Midnight'
+                    ? 'hover:bg-slate-700 text-gray-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+                }`}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              {/* User Info */}
+              <div
+                className={`p-4 rounded-lg ${
+                  theme === 'Midnight' ? 'bg-slate-700/50' : 'bg-gray-50'
+                }`}
+              >
+                <p className={`text-sm ${styles.muted} mb-1`}>Password reset for:</p>
+                <p className={`font-semibold ${styles.text}`}>
+                  {resetPasswordModal.userName}
+                </p>
+                <p className={`text-sm ${styles.muted}`}>
+                  User Code: {resetPasswordModal.userCode}
+                </p>
+              </div>
+
+              {/* Temporary Password */}
+              <div>
+                <label className={`block text-sm font-medium ${styles.text} mb-2`}>
+                  Temporary Password
+                </label>
+                <div className="flex gap-2">
+                  <div
+                    className={`flex-1 p-4 rounded-lg border-2 font-mono text-2xl tracking-wider text-center ${
+                      theme === 'Midnight'
+                        ? 'bg-slate-900 border-amber-500/50 text-amber-400'
+                        : 'bg-amber-50 border-amber-500 text-amber-900'
+                    }`}
+                  >
+                    {resetPasswordModal.temporaryPassword}
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(resetPasswordModal.temporaryPassword)}
+                    className={`px-4 rounded-lg border-2 transition-colors ${
+                      theme === 'Midnight'
+                        ? 'bg-slate-700 border-slate-600 hover:bg-slate-600 text-gray-300'
+                        : 'bg-gray-100 border-gray-300 hover:bg-gray-200 text-gray-700'
+                    }`}
+                    title="Copy to clipboard"
+                  >
+                    <Copy className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div
+                className={`p-4 rounded-lg border ${
+                  theme === 'Midnight'
+                    ? 'bg-amber-500/10 border-amber-500/30'
+                    : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                <p className={`text-sm font-medium mb-2 ${styles.text}`}>
+                  Important Instructions:
+                </p>
+                <ul className={`text-sm space-y-1 ${styles.muted}`}>
+                  <li>• Write down this password (it won't be shown again)</li>
+                  <li>• Give it to the user in person</li>
+                  <li>• They must change it on their next login</li>
+                  <li>• The old password will no longer work</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-slate-700">
+              <button
+                onClick={() => setResetPasswordModal(null)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
