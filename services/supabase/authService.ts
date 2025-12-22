@@ -462,10 +462,8 @@ export async function updateShiftName(shiftId: string, newName: string): Promise
   }
 
   // Update shift name
-  const { error } = await supabase
-    .from('shifts')
-    .update({ name: newName.trim() })
-    .eq('id', shiftId);
+  // Type assertion needed due to Supabase generated type limitations
+  const { error } = await (supabase.from('shifts').update as any)({ name: newName.trim() }).eq('id', shiftId);
 
   if (error) {
     if (error.code === '23505') {
