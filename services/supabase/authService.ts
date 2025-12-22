@@ -867,8 +867,10 @@ export async function acceptInvite(
   });
 
   if (profileError) {
-    // Rollback: delete auth user if profile creation fails
-    await supabase.auth.admin.deleteUser(authData.user.id);
+    // Note: Cannot use admin.deleteUser in client-side code (requires service role key)
+    // Sign out the orphaned auth user - admin can clean up orphaned accounts later
+    console.error('[Auth] Profile creation failed, signing out orphaned auth user:', authData.user.id);
+    await supabase.auth.signOut();
     throw new Error(`Failed to create user profile: ${profileError.message}`);
   }
 

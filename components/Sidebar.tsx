@@ -120,7 +120,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       />
 
       {/* Sidebar Container */}
-      <div className={`fixed inset-y-0 left-0 z-40 ${sidebarWidth} transform transition-all duration-300 ease-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col shadow-2xl lg:shadow-none overflow-hidden ${isOpen ? 'translate-x-0' : '-translate-x-full'} ${styles.bg}`}>
+      <div className={`fixed inset-y-0 left-0 z-40 ${sidebarWidth} transform transition-all duration-300 ease-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col shadow-2xl lg:shadow-none overflow-x-hidden ${isOpen ? 'translate-x-0' : '-translate-x-full'} ${styles.bg}`}>
 
         {/* Brand Header */}
         <div className={`flex flex-col ${isCollapsed ? 'px-2' : 'px-4'} pt-4 pb-3 border-b border-slate-800/50`}>
@@ -170,7 +170,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Navigation */}
-        <nav className={`flex-1 py-6 ${isCollapsed ? 'px-2' : 'px-3'} space-y-1.5 ${isCollapsed ? 'overflow-y-hidden' : 'overflow-y-auto'}`}>
+        <nav className={`flex-1 py-6 ${isCollapsed ? 'px-2' : 'px-3'} space-y-1.5 overflow-y-auto overflow-x-hidden`}>
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;

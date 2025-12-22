@@ -125,7 +125,16 @@ function App() {
   const [theme, setTheme] = useState<Theme>('Modern');
   const [activeTab, setActiveTab] = useState('schedule');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    // Load initial collapsed state from localStorage
+    const saved = localStorage.getItem('sidebar_collapsed');
+    return saved === 'true';
+  });
+
+  // Persist sidebar collapsed state
+  useEffect(() => {
+    localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
   // Auth state
   const [authChecking, setAuthChecking] = useState(true);
