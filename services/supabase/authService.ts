@@ -336,6 +336,18 @@ export async function updateProfile(updates: {
   if (error) {
     throw new Error(error.message);
   }
+
+  // Refresh the cached session with updated user data
+  try {
+    const updatedUser = await getCurrentUser();
+    if (updatedUser) {
+      const { data: { session } } = await supabase.auth.getSession();
+      cacheSession(session, updatedUser);
+    }
+  } catch (cacheError) {
+    console.warn('[Auth] Failed to update cache after profile update:', cacheError);
+    // Don't throw - the update succeeded, cache refresh is secondary
+  }
 }
 
 // ============================================

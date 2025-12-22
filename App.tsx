@@ -4242,15 +4242,58 @@ function App() {
                 }}
                 onProcessPicture={async (file) => {
                   try {
-                    // Convert image to base64
-                    const reader = new FileReader();
-                    const base64Promise = new Promise<string>((resolve, reject) => {
-                      reader.onload = () => resolve(reader.result as string);
-                      reader.onerror = reject;
-                      reader.readAsDataURL(file);
-                    });
+                    // Compress and resize image before upload
+                    const compressImage = (imgFile: File, maxSize: number = 256, quality: number = 0.8): Promise<string> => {
+                      return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                          const img = new Image();
+                          img.onload = () => {
+                            // Create canvas for resizing
+                            const canvas = document.createElement('canvas');
+                            let width = img.width;
+                            let height = img.height;
 
-                    const base64 = await base64Promise;
+                            // Calculate new dimensions (max 256x256 for profile pics)
+                            if (width > height) {
+                              if (width > maxSize) {
+                                height = Math.round((height * maxSize) / width);
+                                width = maxSize;
+                              }
+                            } else {
+                              if (height > maxSize) {
+                                width = Math.round((width * maxSize) / height);
+                                height = maxSize;
+                              }
+                            }
+
+                            canvas.width = width;
+                            canvas.height = height;
+
+                            // Draw and compress
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx) {
+                              reject(new Error('Failed to get canvas context'));
+                              return;
+                            }
+                            ctx.drawImage(img, 0, 0, width, height);
+
+                            // Convert to compressed JPEG
+                            const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                            resolve(compressedBase64);
+                          };
+                          img.onerror = () => reject(new Error('Failed to load image'));
+                          img.src = e.target?.result as string;
+                        };
+                        reader.onerror = () => reject(new Error('Failed to read file'));
+                        reader.readAsDataURL(imgFile);
+                      });
+                    };
+
+                    // Compress image to ~20-50KB (256x256, 80% quality)
+                    const base64 = await compressImage(file, 256, 0.8);
+
+                    console.log('[Profile] Compressed image size:', Math.round(base64.length / 1024), 'KB');
 
                     // Save to user preferences
                     await updateProfile({
