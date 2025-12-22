@@ -661,9 +661,11 @@ const PlanningModal: React.FC<PlanningModalProps> = ({
     ? `${existingExclusions.id}-${existingExclusions.updatedAt}`
     : `${year}-W${weekNumber}-no-exclusions`;
 
-  // Available operators (non-coordinators)
+  // Available operators (non-coordinators) - sorted A-Z
   const availableOperators = useMemo(() =>
-    operators.filter(op => op.type !== 'Coordinator' && op.status === 'Active' && !op.archived),
+    operators
+      .filter(op => op.type !== 'Coordinator' && op.status === 'Active' && !op.archived)
+      .sort((a, b) => a.name.localeCompare(b.name)),
     [operators]
   );
 
