@@ -585,11 +585,11 @@ export async function deactivateUser(userId: string): Promise<void> {
   }
 
   // Get target user to verify same shift
-  const { data: targetUser, error: fetchError } = await supabase
+  const { data: targetUser, error: fetchError } = await (supabase
     .from('users')
     .select('shift_id, role')
     .eq('id', userId)
-    .single();
+    .single() as any);
 
   if (fetchError) {
     throw new Error(fetchError.message);
