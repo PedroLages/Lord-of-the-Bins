@@ -170,7 +170,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Navigation */}
-        <nav className={`flex-1 py-6 ${isCollapsed ? 'px-2' : 'px-3'} space-y-1.5 overflow-y-auto`}>
+        <nav className={`flex-1 py-6 ${isCollapsed ? 'px-2' : 'px-3'} space-y-1.5 ${isCollapsed ? 'overflow-y-hidden' : 'overflow-y-auto'}`}>
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
