@@ -219,9 +219,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className={`rounded-lg p-3 border mb-3 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-slate-800/50 border-slate-700/50'}`}>
               <div className="flex items-center gap-3">
                 {/* Avatar */}
-                {user.profilePicture ? (
+                {user.preferences?.profilePicture ? (
                   <img
-                    src={user.profilePicture}
+                    src={user.preferences.profilePicture}
                     alt={user.displayName}
                     className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
                   />
@@ -255,9 +255,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           {/* Collapsed user avatar */}
           {user && isCollapsed && (
             <div className="flex justify-center mb-3">
-              {user.profilePicture ? (
+              {user.preferences?.profilePicture ? (
                 <img
-                  src={user.profilePicture}
+                  src={user.preferences.profilePicture}
                   alt={user.displayName}
                   className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
                   title={user.displayName}
