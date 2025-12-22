@@ -35,7 +35,8 @@ import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
-import ToastSystem, { useToasts } from './components/ToastSystem';
+import UserManagementSettings from './components/UserManagementSettings';
+import ToastSystem, { useToasts} from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
 import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule } from './services/schedulingService';
@@ -408,7 +409,7 @@ function App() {
   }, [toast]);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'shifts'>('appearance');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'shifts'>('appearance');
 
   // Active color palette (computed from appearance settings)
   const activePalette = useMemo(() => {
@@ -3988,6 +3989,7 @@ function App() {
            </div>
            {[
              { id: 'profile', label: 'My Profile', icon: User },
+             { id: 'team', label: 'Team Management', icon: Users },
              { id: 'shifts', label: 'Shift Management', icon: Repeat },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
            ].map((item) => (
@@ -4379,6 +4381,15 @@ function App() {
                     throw error;
                   }
                 }}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'team' && currentUser && (
+              <UserManagementSettings
+                currentUser={currentUser}
+                theme={theme}
+                styles={styles}
                 toast={toast}
               />
            )}

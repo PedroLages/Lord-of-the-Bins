@@ -472,3 +472,123 @@ export async function updateShiftName(shiftId: string, newName: string): Promise
     throw new Error(error.message);
   }
 }
+
+// ============================================
+// USER MANAGEMENT
+// ============================================
+
+/**
+ * Get all team members in the current user's shift
+ * Team Leaders can see all members in their shift
+ */
+export async function getTeamMembers(): Promise<CloudUser[]> {
+  const supabase = requireSupabaseClient();
+
+  // Get current user to determine their shift
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  // Fetch all users in the same shift
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('shift_id', currentUser.shiftId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  // Transform to CloudUser format
+  return (data || []).map((user) => ({
+    id: user.id,
+    userCode: user.user_code,
+    email: user.email,
+    displayName: user.display_name,
+    role: user.role as 'Team Leader' | 'TC',
+    shiftId: user.shift_id,
+    shiftName: currentUser.shiftName, // Use current user's shift name
+    preferences: user.preferences || {},
+    createdAt: user.created_at,
+  }));
+}
+
+/**
+ * Deactivate a user account (Team Leaders only)
+ * This is a soft delete - sets a flag in preferences
+ */
+export async function deactivateUser(userId: string): Promise<void> {
+  const supabase = requireSupabaseClient();
+
+  // Get current user to verify they're a Team Leader
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can deactivate users');
+  }
+
+  // Get target user to verify same shift
+  const { data: targetUser, error: fetchError } = await supabase
+    .from('users')
+    .select('shift_id, role')
+    .eq('id', userId)
+    .single();
+
+  if (fetchError) {
+    throw new Error(fetchError.message);
+  }
+
+  if (!targetUser) {
+    throw new Error('User not found');
+  }
+
+  // Can't deactivate users from different shifts
+  if (targetUser.shift_id !== currentUser.shiftId) {
+    throw new Error('Cannot deactivate users from other shifts');
+  }
+
+  // Can't deactivate other Team Leaders
+  if (targetUser.role === 'Team Leader') {
+    throw new Error('Cannot deactivate Team Leaders');
+  }
+
+  // Update user preferences to mark as deactivated
+  const { error } = await (supabase.from('users').update as any)({
+    preferences: { deactivated: true, deactivatedAt: new Date().toISOString(), deactivatedBy: currentUser.id },
+  }).eq('id', userId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Reactivate a deactivated user account (Team Leaders only)
+ */
+export async function reactivateUser(userId: string): Promise<void> {
+  const supabase = requireSupabaseClient();
+
+  // Get current user to verify they're a Team Leader
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error('Not authenticated');
+  }
+
+  if (currentUser.role !== 'Team Leader') {
+    throw new Error('Only Team Leaders can reactivate users');
+  }
+
+  // Update user preferences to remove deactivation flag
+  const { error } = await (supabase.from('users').update as any)({
+    preferences: { deactivated: false },
+  }).eq('id', userId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
