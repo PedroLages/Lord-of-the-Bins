@@ -863,7 +863,7 @@ export async function acceptInvite(
   const inviteToken = await validateInviteToken(token);
 
   // Auto-generate unique user code
-  const { data: userCode, error: codeGenError } = await supabase.rpc('generate_user_code', {
+  const { data: userCode, error: codeGenError } = await (supabase.rpc as any)('generate_user_code', {
     p_shift_id: inviteToken.shiftId,
     p_role: inviteToken.role
   });
@@ -909,7 +909,7 @@ export async function acceptInvite(
   }
 
   // Mark invite token as used (using database function to bypass RLS)
-  const { error: tokenUpdateError } = await supabase.rpc('mark_invite_token_as_used', {
+  const { error: tokenUpdateError } = await (supabase.rpc as any)('mark_invite_token_as_used', {
     token_id: inviteToken.id,
     user_id: authData.user.id
   });
