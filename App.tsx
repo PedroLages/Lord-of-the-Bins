@@ -25,7 +25,7 @@ import {
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
   type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
-import { getCurrentUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
+import { getCurrentUser, getCachedUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
 import OperatorModal from './components/OperatorModal';
 import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
@@ -302,21 +302,38 @@ function App() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Check if user is logged in
+        // OPTIMIZATION: Check cached session first for instant load
+        const cachedUser = getCachedUser();
+        if (cachedUser) {
+          setCurrentUser(cachedUser);
+          setAuthChecking(false); // Show UI immediately with cached data
+
+          // Apply cached theme preference
+          if (cachedUser.preferences?.theme) {
+            const validThemes: Theme[] = ['Modern', 'Midnight'];
+            if (validThemes.includes(cachedUser.preferences.theme as Theme)) {
+              setTheme(cachedUser.preferences.theme as Theme);
+            }
+          }
+        }
+
+        // Then refresh from Supabase in background (non-blocking)
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
-          // Apply user's theme preference
+          // Update theme if it changed
           if (user.preferences?.theme) {
             const validThemes: Theme[] = ['Modern', 'Midnight'];
             if (validThemes.includes(user.preferences.theme as Theme)) {
               setTheme(user.preferences.theme as Theme);
             }
           }
+        } else if (!cachedUser) {
+          // No cached user and no valid session - show login
+          setAuthChecking(false);
         }
       } catch (err) {
         console.error('Auth check failed:', err);
-      } finally {
         setAuthChecking(false);
       }
     };

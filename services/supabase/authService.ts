@@ -396,6 +396,15 @@ function clearCachedSession(): void {
 // ============================================
 
 /**
+ * Get cached user for instant load (no network calls)
+ * Returns null if no cached user or cache expired
+ */
+export function getCachedUser(): CloudUser | null {
+  const cached = getCachedSession();
+  return cached?.user || null;
+}
+
+/**
  * Check if Supabase auth is available
  */
 export function isCloudAuthAvailable(): boolean {
