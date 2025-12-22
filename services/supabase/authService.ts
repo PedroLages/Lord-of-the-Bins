@@ -916,7 +916,16 @@ export async function acceptInvite(
 
   if (tokenUpdateError) {
     console.error('[Auth] Failed to mark invite token as used:', tokenUpdateError);
-    // Don't throw - user account was created successfully, just log the error
+
+    // Critical: Clean up the created user profile and auth account to prevent token reuse
+    try {
+      await (supabase.from('users').delete as any)().eq('id', authData.user.id);
+      await supabase.auth.signOut();
+    } catch (cleanupError) {
+      console.error('[Auth] Cleanup failed after token marking error:', cleanupError);
+    }
+
+    throw new Error('Failed to mark invite token as used. Please try again with a new invite link.');
   }
 
   // Return the newly created user and their auto-generated code
