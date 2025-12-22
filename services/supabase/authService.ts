@@ -746,7 +746,7 @@ export async function getInviteTokens(): Promise<InviteToken[]> {
     .from('invite_tokens') as any)
     .select(`
       *,
-      creator:created_by (display_name)
+      creator:users!created_by(display_name)
     `)
     .eq('shift_id', currentUser.shiftId)
     .order('created_at', { ascending: false });
@@ -808,8 +808,8 @@ export async function validateInviteToken(token: string): Promise<InviteToken> {
     .from('invite_tokens') as any)
     .select(`
       *,
-      shift:shift_id (name),
-      creator:created_by (display_name)
+      shift:shifts!shift_id(name),
+      creator:users!created_by(display_name)
     `)
     .eq('token', token)
     .single();
@@ -850,31 +850,30 @@ export async function validateInviteToken(token: string): Promise<InviteToken> {
 
 /**
  * Accept an invite and create a new user account
+ * User code is auto-generated to prevent conflicts
  */
 export async function acceptInvite(
   token: string,
-  userCode: string,
   displayName: string,
   password: string
-): Promise<CloudUser> {
+): Promise<{ user: CloudUser; userCode: string }> {
   const supabase = requireSupabaseClient();
 
   // Validate the invite token
   const inviteToken = await validateInviteToken(token);
 
+  // Auto-generate unique user code
+  const { data: userCode, error: codeGenError } = await supabase.rpc('generate_user_code', {
+    p_shift_id: inviteToken.shiftId,
+    p_role: inviteToken.role
+  });
+
+  if (codeGenError || !userCode) {
+    throw new Error(`Failed to generate user code: ${codeGenError?.message || 'Unknown error'}`);
+  }
+
   // Generate internal email for user code
   const email = userCodeToEmail(userCode);
-
-  // Check if user code is already taken
-  const { data: existingUser } = await supabase
-    .from('users')
-    .select('user_code')
-    .eq('user_code', userCode)
-    .single();
-
-  if (existingUser) {
-    throw new Error('User code is already taken');
-  }
 
   // Create auth user
   const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -909,18 +908,25 @@ export async function acceptInvite(
     throw new Error(`Failed to create user profile: ${profileError.message}`);
   }
 
-  // Mark invite token as used
-  await (supabase.from('invite_tokens').update as any)({
-    status: 'used',
-    used_by: authData.user.id,
-    used_at: new Date().toISOString(),
-  }).eq('id', inviteToken.id);
+  // Mark invite token as used (using database function to bypass RLS)
+  const { error: tokenUpdateError } = await supabase.rpc('mark_invite_token_as_used', {
+    token_id: inviteToken.id,
+    user_id: authData.user.id
+  });
 
-  // Return the newly created user (automatically signed in)
+  if (tokenUpdateError) {
+    console.error('[Auth] Failed to mark invite token as used:', tokenUpdateError);
+    // Don't throw - user account was created successfully, just log the error
+  }
+
+  // Return the newly created user and their auto-generated code
   const newUser = await getCurrentUser();
   if (!newUser) {
     throw new Error('Failed to retrieve user after creation');
   }
 
-  return newUser;
+  return {
+    user: newUser,
+    userCode: userCode as string
+  };
 }

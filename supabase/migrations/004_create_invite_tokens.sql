@@ -47,8 +47,8 @@ CREATE POLICY "Team Leaders can update their shift's invite tokens"
   USING (shift_id = get_user_shift_id() AND get_user_role() = 'Team Leader')
   WITH CHECK (shift_id = get_user_shift_id() AND get_user_role() = 'Team Leader');
 
--- Anyone can view active tokens they're trying to use (for validation)
+-- Anyone (including anonymous users) can view active tokens for validation
 CREATE POLICY "Public can view active tokens by token value"
   ON invite_tokens FOR SELECT
-  TO authenticated
+  TO anon, authenticated
   USING (status = 'active' AND expires_at > NOW());
