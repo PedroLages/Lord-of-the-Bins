@@ -600,12 +600,12 @@ export async function deactivateUser(userId: string): Promise<void> {
   }
 
   // Can't deactivate users from different shifts
-  if ((targetUser as any).shift_id !== currentUser.shiftId) {
+  if (targetUser.shift_id !== currentUser.shiftId) {
     throw new Error('Cannot deactivate users from other shifts');
   }
 
   // Can't deactivate other Team Leaders
-  if ((targetUser as any).role === 'Team Leader') {
+  if (targetUser.role === 'Team Leader') {
     throw new Error('Cannot deactivate Team Leaders');
   }
 
