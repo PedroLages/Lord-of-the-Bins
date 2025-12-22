@@ -4011,12 +4011,14 @@ function App() {
              Account
            </div>
            {[
-             { id: 'profile', label: 'My Profile', icon: User },
-             { id: 'team', label: 'Team Management', icon: Users },
-             { id: 'invites', label: 'Invite Links', icon: UserPlus },
-             { id: 'shifts', label: 'Shift Management', icon: Repeat },
-             { id: 'integrations', label: 'Integrations', icon: Puzzle },
-           ].map((item) => (
+             { id: 'profile', label: 'My Profile', icon: User, teamLeaderOnly: false },
+             { id: 'team', label: 'Team Management', icon: Users, teamLeaderOnly: true },
+             { id: 'invites', label: 'Invite Links', icon: UserPlus, teamLeaderOnly: true },
+             { id: 'shifts', label: 'Shift Management', icon: Repeat, teamLeaderOnly: true },
+             { id: 'integrations', label: 'Integrations', icon: Puzzle, teamLeaderOnly: false },
+           ]
+             .filter(item => !item.teamLeaderOnly || currentUser?.role === 'Team Leader')
+             .map((item) => (
              <button
                key={item.id}
                onClick={() => setSettingsTab(item.id as typeof settingsTab)}

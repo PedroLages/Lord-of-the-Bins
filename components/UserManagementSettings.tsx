@@ -41,6 +41,16 @@ interface UserManagementSettingsProps {
   };
 }
 
+/**
+ * Validates that a profile picture URL is a safe image data URL
+ * Prevents XSS attacks via malicious data URLs
+ */
+function isValidImageDataUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  // Only allow data URLs with safe image MIME types
+  return /^data:image\/(jpeg|jpg|png|webp|gif);base64,/.test(url);
+}
+
 export default function UserManagementSettings({
   currentUser,
   theme,
@@ -321,8 +331,8 @@ export default function UserManagementSettings({
               >
                 {/* Avatar & Name */}
                 <div className="flex items-start gap-3 mb-3">
-                  {/* Avatar */}
-                  {member.preferences?.profilePicture ? (
+                  {/* Avatar - with XSS protection */}
+                  {isValidImageDataUrl(member.preferences?.profilePicture) ? (
                     <img
                       src={member.preferences.profilePicture}
                       alt={member.displayName}
