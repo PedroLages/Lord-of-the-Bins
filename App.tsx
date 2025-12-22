@@ -34,6 +34,7 @@ import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
+import ShiftManagementSettings from './components/ShiftManagementSettings';
 import ToastSystem, { useToasts } from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -393,7 +394,7 @@ function App() {
   }, [toast]);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile'>('appearance');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'shifts'>('appearance');
 
   // Active color palette (computed from appearance settings)
   const activePalette = useMemo(() => {
@@ -3973,6 +3974,7 @@ function App() {
            </div>
            {[
              { id: 'profile', label: 'My Profile', icon: User },
+             { id: 'shifts', label: 'Shift Management', icon: Repeat },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
            ].map((item) => (
              <button
@@ -4034,9 +4036,24 @@ function App() {
                     <h3 className={`text-lg font-semibold ${styles.text}`}>App Theme</h3>
                     <div className="grid grid-cols-2 gap-4 max-w-md">
                        <button
-                          onClick={() => {
+                          onClick={async () => {
                              setTheme('Modern');
                              saveSettings('Modern', schedulingRules, skills);
+
+                             // Save theme to Supabase user preferences
+                             if (currentUser) {
+                               try {
+                                 await updateProfile({
+                                   preferences: {
+                                     ...currentUser.preferences,
+                                     theme: 'Modern',
+                                   },
+                                 });
+                               } catch (err) {
+                                 console.warn('Failed to sync theme to cloud:', err);
+                               }
+                             }
+
                              toast.success('Theme changed to Modern');
                           }}
                           className={`relative p-4 rounded-xl border-2 transition-all ${
@@ -4064,9 +4081,24 @@ function App() {
                        </button>
 
                        <button
-                          onClick={() => {
+                          onClick={async () => {
                              setTheme('Midnight');
                              saveSettings('Midnight', schedulingRules, skills);
+
+                             // Save theme to Supabase user preferences
+                             if (currentUser) {
+                               try {
+                                 await updateProfile({
+                                   preferences: {
+                                     ...currentUser.preferences,
+                                     theme: 'Midnight',
+                                   },
+                                 });
+                               } catch (err) {
+                                 console.warn('Failed to sync theme to cloud:', err);
+                               }
+                             }
+
                              toast.success('Theme changed to Midnight');
                           }}
                           className={`relative p-4 rounded-xl border-2 transition-all ${
@@ -4326,6 +4358,15 @@ function App() {
                     throw error;
                   }
                 }}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'shifts' && currentUser && (
+              <ShiftManagementSettings
+                user={currentUser}
+                theme={theme}
+                styles={styles}
                 toast={toast}
               />
            )}

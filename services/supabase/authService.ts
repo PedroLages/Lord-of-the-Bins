@@ -445,3 +445,32 @@ export async function getShifts(): Promise<{ id: string; name: string }[]> {
 
   return data || [];
 }
+
+/**
+ * Update shift name (Team Leaders only)
+ */
+export async function updateShiftName(shiftId: string, newName: string): Promise<void> {
+  const supabase = requireSupabaseClient();
+
+  // Validate input
+  if (!newName.trim()) {
+    throw new Error('Shift name cannot be empty');
+  }
+
+  if (newName.length > 50) {
+    throw new Error('Shift name must be 50 characters or less');
+  }
+
+  // Update shift name
+  const { error } = await supabase
+    .from('shifts')
+    .update({ name: newName.trim() })
+    .eq('id', shiftId);
+
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error('A shift with this name already exists');
+    }
+    throw new Error(error.message);
+  }
+}
