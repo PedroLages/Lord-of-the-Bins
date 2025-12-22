@@ -11,7 +11,7 @@ import { storage } from './index';
 import { supabaseStorage, SupabaseStorageService } from '../supabase/supabaseStorage';
 import { isSupabaseConfigured, getSupabaseClient } from '../supabase/client';
 import { queueSync, subscribeSyncState, getSyncState, SyncState } from '../sync/syncQueue';
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, PlanningTemplate } from '../../types';
 import type { SchedulingRules } from '../schedulingService';
 import type { AppSettings } from './database';
 
@@ -41,6 +41,12 @@ export interface HybridStorageService {
   saveSettings(settings: AppSettings): Promise<void>;
   getSchedulingRules(): Promise<SchedulingRules | null>;
   saveSchedulingRules(rules: SchedulingRules): Promise<void>;
+
+  // Planning Templates
+  getAllPlanningTemplates(): Promise<PlanningTemplate[]>;
+  getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined>;
+  savePlanningTemplate(template: PlanningTemplate): Promise<void>;
+  deletePlanningTemplate(id: string): Promise<void>;
 
   // Sync
   isCloudEnabled(): boolean;
@@ -257,6 +263,45 @@ class HybridStorage implements HybridStorageService {
   }
 
   // ============================================
+  // PLANNING TEMPLATES
+  // ============================================
+
+  async getAllPlanningTemplates(): Promise<PlanningTemplate[]> {
+    return storage.getAllPlanningTemplates();
+  }
+
+  async getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined> {
+    return storage.getPlanningTemplateById(id);
+  }
+
+  async savePlanningTemplate(template: PlanningTemplate): Promise<void> {
+    // 1. Save to local immediately
+    await storage.savePlanningTemplate(template);
+
+    // 2. Queue for cloud sync (non-blocking)
+    if (this.isCloudEnabled()) {
+      queueSync('planning_templates', 'update', template.id, {
+        local_id: template.id,
+        shift_id: this.shiftId,
+        name: template.name,
+        description: template.description || null,
+        exclusions: template.exclusions || [],
+        rules: template.rules || [],
+      });
+    }
+  }
+
+  async deletePlanningTemplate(id: string): Promise<void> {
+    // 1. Delete from local
+    await storage.deletePlanningTemplate(id);
+
+    // 2. Queue for cloud sync
+    if (this.isCloudEnabled()) {
+      queueSync('planning_templates', 'delete', id, { local_id: id });
+    }
+  }
+
+  // ============================================
   // SYNC OPERATIONS
   // ============================================
 
@@ -268,11 +313,12 @@ class HybridStorage implements HybridStorageService {
       throw new Error('Cloud sync is not enabled');
     }
 
-    const [operators, tasks, schedules, taskReqs] = await Promise.all([
+    const [operators, tasks, schedules, taskReqs, templates] = await Promise.all([
       this.getOperators(),
       this.getTasks(),
       this.getAllSchedules(),
       this.getTaskRequirements(),
+      this.getAllPlanningTemplates(),
     ]);
 
     // Queue all items for sync
@@ -287,6 +333,9 @@ class HybridStorage implements HybridStorageService {
     }
     for (const req of taskReqs) {
       await this.saveTaskRequirement(req);
+    }
+    for (const template of templates) {
+      await this.savePlanningTemplate(template);
     }
 
     console.log('[HybridStorage] All data queued for cloud sync');
@@ -330,6 +379,10 @@ class HybridStorage implements HybridStorageService {
             schedulingRules: cloudData.schedulingRules,
           });
         }
+      }
+
+      for (const template of cloudData.planningTemplates) {
+        await storage.savePlanningTemplate(template);
       }
 
       console.log('[HybridStorage] Cloud data merged with local');

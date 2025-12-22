@@ -6,7 +6,7 @@
  */
 
 import { getSupabaseClient, requireSupabaseClient, isSupabaseConfigured } from './client';
-import type { Operator, TaskType, WeeklySchedule, TaskRequirement } from '../../types';
+import type { Operator, TaskType, WeeklySchedule, TaskRequirement, PlanningTemplate } from '../../types';
 import type { SchedulingRules } from '../schedulingService';
 import type { AppSettings } from '../storage/database';
 import type { InsertTables, DbOperator, DbTask, DbSchedule, DbTaskRequirement, DbSchedulingRules, DbAppSettings } from './types';
@@ -104,6 +104,29 @@ function mapDbToSchedule(db: any): WeeklySchedule {
     status: db.status,
     locked: db.locked,
     days: db.assignments || [],
+  };
+}
+
+function mapTemplateToDb(template: PlanningTemplate, shiftId: string) {
+  return {
+    local_id: template.id,
+    shift_id: shiftId,
+    name: template.name,
+    description: template.description || null,
+    exclusions: template.exclusions || [],
+    rules: template.rules || [],
+  };
+}
+
+function mapDbToTemplate(db: any): PlanningTemplate {
+  return {
+    id: db.local_id || db.id,
+    name: db.name,
+    description: db.description || undefined,
+    exclusions: db.exclusions || [],
+    rules: db.rules || [],
+    createdAt: db.created_at,
+    updatedAt: db.updated_at || undefined,
   };
 }
 
@@ -427,6 +450,66 @@ export class SupabaseStorageService {
   }
 
   // ============================================
+  // PLANNING TEMPLATES
+  // ============================================
+
+  async getAllPlanningTemplates(): Promise<PlanningTemplate[]> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return [];
+
+    const { data, error } = await supabase
+      .from('planning_templates')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(`Failed to fetch planning templates: ${error.message}`);
+    return (data || []).map(mapDbToTemplate);
+  }
+
+  async getPlanningTemplateById(id: string): Promise<PlanningTemplate | undefined> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return undefined;
+
+    const { data, error } = await supabase
+      .from('planning_templates')
+      .select('*')
+      .eq('local_id', id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return undefined; // Not found
+      throw new Error(`Failed to fetch planning template: ${error.message}`);
+    }
+    return data ? mapDbToTemplate(data) : undefined;
+  }
+
+  async savePlanningTemplate(template: PlanningTemplate): Promise<void> {
+    if (!this.isAvailable()) return;
+
+    const supabase = requireSupabaseClient();
+    const shiftId = this.requireShiftId();
+    const dbTemplate = mapTemplateToDb(template, shiftId);
+
+    const { error } = await supabase
+      .from('planning_templates')
+      .upsert(dbTemplate as any, { onConflict: 'local_id' });
+
+    if (error) throw new Error(`Failed to save planning template: ${error.message}`);
+  }
+
+  async deletePlanningTemplate(id: string): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const { error } = await supabase
+      .from('planning_templates')
+      .delete()
+      .eq('local_id', id);
+
+    if (error) throw new Error(`Failed to delete planning template: ${error.message}`);
+  }
+
+  // ============================================
   // SYNC HELPERS
   // ============================================
 
@@ -439,16 +522,18 @@ export class SupabaseStorageService {
     schedules: WeeklySchedule[];
     taskRequirements: TaskRequirement[];
     schedulingRules: SchedulingRules | null;
+    planningTemplates: PlanningTemplate[];
   }> {
-    const [operators, tasks, schedules, taskRequirements, schedulingRules] = await Promise.all([
+    const [operators, tasks, schedules, taskRequirements, schedulingRules, planningTemplates] = await Promise.all([
       this.getOperators(),
       this.getTasks(),
       this.getAllSchedules(),
       this.getTaskRequirements(),
       this.getSchedulingRules(),
+      this.getAllPlanningTemplates(),
     ]);
 
-    return { operators, tasks, schedules, taskRequirements, schedulingRules };
+    return { operators, tasks, schedules, taskRequirements, schedulingRules, planningTemplates };
   }
 }
 

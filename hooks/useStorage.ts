@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Operator, TaskType, WeeklySchedule, TaskRequirement, AppearanceSettings, WeeklyExclusions, FillGapsSettings, PlanningTemplate } from '../types';
 import { DEFAULT_APPEARANCE_SETTINGS, DEFAULT_FILL_GAPS_SETTINGS } from '../types';
 import type { SchedulingRules } from '../services/schedulingService';
-import { storage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError } from '../services/storage';
+import { storage, hybridStorage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError } from '../services/storage';
 import type { AppSettings } from '../services/storage';
 
 /**
@@ -339,10 +339,10 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
     }
   }, []);
 
-  // Planning Templates
+  // Planning Templates (use hybridStorage for cloud sync)
   const getAllPlanningTemplates = useCallback(async () => {
     try {
-      return await storage.getAllPlanningTemplates();
+      return await hybridStorage.getAllPlanningTemplates();
     } catch (err) {
       console.error('Failed to get planning templates:', err);
       return [];
@@ -351,7 +351,7 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const savePlanningTemplate = useCallback(async (template: PlanningTemplate) => {
     try {
-      await storage.savePlanningTemplate(template);
+      await hybridStorage.savePlanningTemplate(template);
     } catch (err) {
       console.error('Failed to save planning template:', err);
     }
@@ -359,7 +359,7 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const deletePlanningTemplate = useCallback(async (id: string) => {
     try {
-      await storage.deletePlanningTemplate(id);
+      await hybridStorage.deletePlanningTemplate(id);
     } catch (err) {
       console.error('Failed to delete planning template:', err);
     }
