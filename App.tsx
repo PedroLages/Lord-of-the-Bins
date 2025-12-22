@@ -36,8 +36,6 @@ import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
 import UserManagementSettings from './components/UserManagementSettings';
-import InviteManagementSettings from './components/InviteManagementSettings';
-import InviteAcceptPage from './components/InviteAcceptPage';
 import ToastSystem, { useToasts} from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -423,7 +421,7 @@ function App() {
   }, [toast]);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'invites' | 'shifts'>('appearance');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'shifts'>('appearance');
 
   // Active color palette (computed from appearance settings)
   const activePalette = useMemo(() => {
@@ -4004,7 +4002,6 @@ function App() {
            {[
              { id: 'profile', label: 'My Profile', icon: User },
              { id: 'team', label: 'Team Management', icon: Users },
-             { id: 'invites', label: 'Invite Links', icon: UserPlus },
              { id: 'shifts', label: 'Shift Management', icon: Repeat },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
            ].map((item) => (
@@ -4402,15 +4399,6 @@ function App() {
 
            {settingsTab === 'team' && currentUser && (
               <UserManagementSettings
-                currentUser={currentUser}
-                theme={theme}
-                styles={styles}
-                toast={toast}
-              />
-           )}
-
-           {settingsTab === 'invites' && currentUser && (
-              <InviteManagementSettings
                 currentUser={currentUser}
                 theme={theme}
                 styles={styles}
