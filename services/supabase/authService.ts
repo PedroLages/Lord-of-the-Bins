@@ -204,7 +204,20 @@ export async function signOut(): Promise<void> {
   const supabase = getSupabaseClient();
 
   if (supabase) {
-    await supabase.auth.signOut();
+    try {
+      // Add a timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Sign out timeout')), 3000)
+      );
+
+      await Promise.race([
+        supabase.auth.signOut(),
+        timeoutPromise
+      ]);
+    } catch (error) {
+      // Log error but continue with local sign out
+      console.warn('Supabase sign out failed, continuing with local sign out:', error);
+    }
   }
 
   // Clear cached session
@@ -223,41 +236,55 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     return cached?.user || null;
   }
 
-  const { data: { user: authUser } } = await supabase.auth.getUser();
+  try {
+    // Add timeout to prevent hanging
+    const timeoutPromise = new Promise<null>((_, reject) =>
+      setTimeout(() => reject(new Error('Get user timeout')), 3000)
+    );
 
-  if (!authUser) {
-    // Try cached session
+    const getUserPromise = (async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+
+      if (!authUser) {
+        return null;
+      }
+
+      // Fetch profile
+      const { data, error } = await supabase
+        .from('users')
+        .select(`
+          *,
+          shifts:shift_id (name)
+        `)
+        .eq('id', authUser.id)
+        .single();
+
+      if (error || !data) {
+        return null;
+      }
+
+      // Type assertion to help TypeScript understand the query result
+      const profile = data as DbUser & { shifts: { name: string } | null };
+
+      return {
+        id: profile.id,
+        userCode: profile.user_code,
+        email: profile.email,
+        displayName: profile.display_name,
+        role: profile.role,
+        shiftId: profile.shift_id,
+        shiftName: profile.shifts?.name || 'Unknown Shift',
+        preferences: profile.preferences as any,
+      };
+    })();
+
+    return await Promise.race([getUserPromise, timeoutPromise]);
+  } catch (error) {
+    // Log error and return cached user or null
+    console.warn('Supabase get user failed, trying cached session:', error);
     const cached = getCachedSession();
     return cached?.user || null;
   }
-
-  // Fetch profile
-  const { data, error } = await supabase
-    .from('users')
-    .select(`
-      *,
-      shifts:shift_id (name)
-    `)
-    .eq('id', authUser.id)
-    .single();
-
-  if (error || !data) {
-    return null;
-  }
-
-  // Type assertion to help TypeScript understand the query result
-  const profile = data as DbUser & { shifts: { name: string } | null };
-
-  return {
-    id: profile.id,
-    userCode: profile.user_code,
-    email: profile.email,
-    displayName: profile.display_name,
-    role: profile.role,
-    shiftId: profile.shift_id,
-    shiftName: profile.shifts?.name || 'Unknown Shift',
-    preferences: profile.preferences as any,
-  };
 }
 
 /**
@@ -415,6 +442,14 @@ function clearCachedSession(): void {
   try {
     localStorage.removeItem(SESSION_CACHE_KEY);
     localStorage.removeItem(USER_CACHE_KEY);
+    // Also clear Supabase's session storage
+    localStorage.removeItem('lotb-auth-token');
+    // Clear all Supabase auth keys
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('sb-') || key.includes('supabase')) {
+        localStorage.removeItem(key);
+      }
+    });
   } catch (error) {
     console.error('[Auth] Failed to clear cached session:', error);
   }

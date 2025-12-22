@@ -8167,6 +8167,7 @@ function App() {
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
+          setSettingsTab={setSettingsTab}
           isOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}

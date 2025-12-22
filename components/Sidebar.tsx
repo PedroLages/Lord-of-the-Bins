@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, ChevronsLeft, ChevronsRight, Cloud, CloudOff, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, ChevronsLeft, ChevronsRight, Cloud, CloudOff, AlertCircle, CheckCircle2, RefreshCw, ChevronUp, UserCircle } from 'lucide-react';
 import { getInitials } from '../types';
 import type { CloudUser } from '../services/supabase/authService';
 import { hybridStorage } from '../services/storage';
@@ -8,6 +8,7 @@ import type { SyncState } from '../services/sync/syncQueue';
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  setSettingsTab?: (tab: 'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'invites' | 'shifts') => void;
   isOpen: boolean;
   toggleSidebar: () => void;
   theme: string;
@@ -20,9 +21,98 @@ interface SidebarProps {
   currentWeekRange?: string; // e.g., "Dec 16-20, 2024"
 }
 
+// Shared User Dropdown Menu Component
+const UserDropdownMenu: React.FC<{
+  theme: string;
+  onClose: () => void;
+  setActiveTab: (tab: string) => void;
+  setSettingsTab?: (tab: 'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'invites' | 'shifts') => void;
+  onOpenFeedback?: () => void;
+  onSignOut?: () => void;
+  isCollapsed?: boolean;
+}> = ({ theme, onClose, setActiveTab, setSettingsTab, onOpenFeedback, onSignOut, isCollapsed = false }) => {
+  const baseClasses = `rounded-lg border shadow-2xl overflow-hidden z-50 opacity-100 ${
+    theme === 'Midnight'
+      ? 'bg-slate-900 border-slate-700'
+      : 'bg-slate-800 border-slate-700'
+  }`;
+
+  const positionClasses = isCollapsed
+    ? 'absolute left-full ml-2 bottom-0 w-56'
+    : 'absolute bottom-full left-0 right-0 mb-2';
+
+  return (
+    <div className={`${baseClasses} ${positionClasses}`} style={isCollapsed ? { minWidth: '224px' } : undefined}>
+      {/* My Profile */}
+      <button
+        onClick={() => {
+          setActiveTab('settings');
+          setSettingsTab?.('profile');
+          onClose();
+        }}
+        className="flex items-center gap-3 px-4 py-3 w-full text-sm font-medium text-left transition-colors text-slate-300 hover:bg-slate-700/50"
+      >
+        <UserCircle className="h-4 w-4" />
+        <span>My Profile</span>
+      </button>
+
+      {/* Settings */}
+      <button
+        onClick={() => {
+          setActiveTab('settings');
+          onClose();
+        }}
+        className="flex items-center gap-3 px-4 py-3 w-full text-sm font-medium text-left transition-colors text-slate-300 hover:bg-slate-700/50"
+      >
+        <Settings className="h-4 w-4" />
+        <span>Settings</span>
+      </button>
+
+      {/* Divider */}
+      <div className="border-t border-slate-700/50" />
+
+      {/* Send Feedback */}
+      {onOpenFeedback && (
+        <button
+          onClick={() => {
+            onOpenFeedback();
+            onClose();
+          }}
+          className={`flex items-center gap-3 px-4 py-3 w-full text-sm font-medium text-left transition-colors ${
+            theme === 'Midnight'
+              ? 'text-indigo-400 hover:bg-indigo-500/10'
+              : 'text-blue-400 hover:bg-blue-500/10'
+          }`}
+        >
+          <MessageSquarePlus className="h-4 w-4" />
+          <span>Send Feedback</span>
+        </button>
+      )}
+
+      {/* Divider */}
+      <div className="border-t border-slate-700/50" />
+
+      {/* Sign Out */}
+      {onSignOut && (
+        <button
+          onClick={() => {
+            onSignOut();
+            onClose();
+          }}
+          className="flex items-center gap-3 px-4 py-3 w-full text-sm font-medium text-left transition-colors text-red-400 hover:bg-red-500/10"
+        >
+          <LogOut className="h-4 w-4" />
+          <span>Sign Out</span>
+        </button>
+      )}
+    </div>
+  );
+};
+
 const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
+  setSettingsTab,
   isOpen,
   toggleSidebar,
   theme,
@@ -48,6 +138,28 @@ const Sidebar: React.FC<SidebarProps> = ({
     lastSyncAt: null,
     error: null,
   });
+
+  // User dropdown state
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+  const expandedDropdownRef = useRef<HTMLDivElement>(null);
+  const collapsedDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      // Check if click is outside the currently active dropdown
+      const activeDropdownRef = isCollapsed ? collapsedDropdownRef : expandedDropdownRef;
+
+      if (activeDropdownRef.current && !activeDropdownRef.current.contains(event.target as Node)) {
+        setIsUserDropdownOpen(false);
+      }
+    };
+
+    if (isUserDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isUserDropdownOpen, isCollapsed]);
 
   // Subscribe to sync state changes
   useEffect(() => {
@@ -124,21 +236,34 @@ const Sidebar: React.FC<SidebarProps> = ({
       />
 
       {/* Sidebar Container */}
-      <div className={`fixed inset-y-0 left-0 z-40 ${sidebarWidth} transform transition-all duration-300 ease-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col shadow-2xl lg:shadow-none overflow-x-hidden ${isOpen ? 'translate-x-0' : '-translate-x-full'} ${styles.bg}`}>
+      <div className={`fixed inset-y-0 left-0 z-40 ${sidebarWidth} transform transition-all duration-300 ease-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col shadow-2xl lg:shadow-none ${isOpen ? 'translate-x-0' : '-translate-x-full'} ${styles.bg}`}>
 
         {/* Brand Header */}
         <div className={`flex flex-col ${isCollapsed ? 'px-2' : 'px-4'} pt-4 pb-3 border-b border-slate-800/50`}>
           {/* Logo Row */}
           <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'px-2'}`}>
-            <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'}`}>
+            <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} flex-1`}>
               <div className={`${isCollapsed ? 'h-10 w-10' : 'h-9 w-9'} rounded-xl flex items-center justify-center shadow-lg ${theme === 'Midnight' ? 'bg-gradient-to-br from-indigo-500 to-indigo-700' : 'bg-gradient-to-br from-blue-500 to-blue-700'} text-white`}>
                 <Box className={`${isCollapsed ? 'h-6 w-6' : 'h-5 w-5'}`} />
               </div>
               {!isCollapsed && (
-                <div>
-                  <h1 className="font-bold text-base tracking-tight leading-none text-white">Lord of the Bins</h1>
-                  <span className={`text-[10px] font-medium uppercase tracking-wider ${styles.heading}`}>Decanting Dept</span>
-                </div>
+                <>
+                  <div className="flex-1">
+                    <h1 className="font-bold text-base tracking-tight leading-none text-white">Lord of the Bins</h1>
+                    <span className={`text-[10px] font-medium uppercase tracking-wider ${styles.heading}`}>Decanting Dept</span>
+                  </div>
+                  {/* Hamburger collapse button (Desktop only, when expanded) */}
+                  {onToggleCollapse && (
+                    <button
+                      onClick={onToggleCollapse}
+                      className="hidden lg:block p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-all"
+                      aria-label="Collapse sidebar"
+                      title="Collapse sidebar"
+                    >
+                      <Menu className="h-5 w-5" />
+                    </button>
+                  )}
+                </>
               )}
             </div>
             {!isCollapsed && (
@@ -148,57 +273,29 @@ const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
 
-          {/* Collapse Toggle Button - Moved to Header (Desktop only) */}
-          {onToggleCollapse && (
-            <div className={`hidden lg:block ${isCollapsed ? 'mt-3' : 'mt-4'}`}>
+          {/* Toggle ON/OFF Button - Only when collapsed (Desktop only) */}
+          {onToggleCollapse && isCollapsed && (
+            <div className="hidden lg:block mt-3">
               <button
                 onClick={onToggleCollapse}
-                className={`group relative w-full flex items-center justify-center ${isCollapsed ? 'px-2' : 'px-3'} py-2.5 rounded-xl border backdrop-blur-sm transition-all duration-300 ${styles.collapseBtn} ${styles.collapseBtnShadow}`}
-                aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                aria-expanded={!isCollapsed}
+                className="group relative w-full flex items-center justify-center px-2 py-3 transition-all duration-300 hover:bg-slate-800/30 rounded-xl"
+                aria-label="Expand sidebar"
+                aria-expanded={false}
+                title="Expand sidebar"
               >
-                {/* Animated Icon Container */}
-                <div className="relative flex items-center justify-center">
-                  {/* Expand Icon - Shows when collapsed */}
-                  <ChevronsRight
-                    className={`h-5 w-5 transition-all duration-300 ${
-                      isCollapsed
-                        ? 'opacity-100 scale-100 rotate-0'
-                        : 'opacity-0 scale-75 -rotate-90 absolute'
-                    }`}
-                  />
-
-                  {/* Collapse Icon - Shows when expanded */}
-                  <ChevronsLeft
-                    className={`h-5 w-5 transition-all duration-300 ${
-                      !isCollapsed
-                        ? 'opacity-100 scale-100 rotate-0'
-                        : 'opacity-0 scale-75 rotate-90 absolute'
-                    }`}
-                  />
-                </div>
-
-                {/* Text Label - Only visible when expanded */}
-                {!isCollapsed && (
-                  <span className="ml-2.5 text-xs font-semibold uppercase tracking-wider transition-opacity duration-300">
-                    Collapse
-                  </span>
-                )}
-
-                {/* Hover Indicator Line */}
-                <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1 rounded-l-full transition-all duration-300 ${
+                {/* Toggle Switch Icon */}
+                <div className={`relative w-9 h-5 rounded-full transition-all duration-300 ${
                   theme === 'Midnight'
-                    ? 'bg-gradient-to-b from-indigo-400 to-indigo-600'
-                    : 'bg-gradient-to-b from-blue-400 to-blue-600'
-                } h-0 group-hover:h-6`} />
-
-                {/* Tooltip for collapsed state */}
-                {isCollapsed && (
-                  <div className="absolute left-full ml-3 px-3 py-1.5 bg-slate-800 text-white text-xs font-medium rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 whitespace-nowrap pointer-events-none z-50 shadow-lg">
-                    Expand sidebar
-                    <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800"></div>
-                  </div>
-                )}
+                    ? 'bg-slate-700 group-hover:bg-slate-600'
+                    : 'bg-slate-600 group-hover:bg-slate-500'
+                }`}>
+                  {/* Switch Thumb */}
+                  <div className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-all duration-300 ${
+                    theme === 'Midnight'
+                      ? 'bg-slate-400 group-hover:bg-slate-300'
+                      : 'bg-slate-300 group-hover:bg-slate-200'
+                  }`} />
+                </div>
               </button>
             </div>
           )}
@@ -273,65 +370,114 @@ const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Footer / Context */}
         <div className={`${isCollapsed ? 'p-2' : 'p-4'} ${styles.footer}`}>
-          {/* User Profile Card */}
+          {/* Divider */}
+          {user && <div className="border-t border-slate-700/50 mb-5" />}
+
+          {/* User Profile Dropdown */}
           {user && !isCollapsed && (
-            <div className={`rounded-lg p-3 border mb-3 ${theme === 'Midnight' ? 'bg-slate-900 border-slate-800' : 'bg-slate-800/50 border-slate-700/50'}`}>
-              <div className="flex items-center gap-3">
-                {/* Avatar */}
-                {user.preferences?.profilePicture ? (
-                  <img
-                    src={user.preferences.profilePicture}
-                    alt={user.displayName}
-                    className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
-                  />
-                ) : (
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'Team Leader'
-                      ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
-                      : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
-                  }`}>
-                    {getInitials(user.displayName)}
+            <div ref={expandedDropdownRef} className="relative mb-3">
+              {/* User Profile Button */}
+              <button
+                onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+                className={`w-full rounded-lg p-3 border transition-all ${
+                  isUserDropdownOpen
+                    ? theme === 'Midnight'
+                      ? 'bg-slate-900 border-indigo-500/50 ring-2 ring-indigo-500/20'
+                      : 'bg-slate-800/70 border-blue-500/50 ring-2 ring-blue-500/20'
+                    : theme === 'Midnight'
+                    ? 'bg-slate-900 border-slate-800 hover:border-indigo-500/30'
+                    : 'bg-slate-800/50 border-slate-700/50 hover:border-blue-500/30'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  {/* Avatar */}
+                  {user.preferences?.profilePicture ? (
+                    <img
+                      src={user.preferences.profilePicture}
+                      alt={user.displayName}
+                      className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
+                    />
+                  ) : (
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                      user.role === 'Team Leader'
+                        ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
+                        : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
+                    }`}>
+                      {getInitials(user.displayName)}
+                    </div>
+                  )}
+                  {/* Name & Role */}
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-sm font-semibold text-white truncate">{user.displayName}</p>
+                    <div className="flex items-center gap-1">
+                      {user.role === 'Team Leader' ? (
+                        <Crown className="w-3 h-3 text-amber-400" />
+                      ) : (
+                        <Shield className="w-3 h-3 text-emerald-400" />
+                      )}
+                      <span className={`text-xs ${user.role === 'Team Leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        {user.role} • {user.shiftName}
+                      </span>
+                    </div>
                   </div>
-                )}
-                {/* Name & Role */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{user.displayName}</p>
-                  <div className="flex items-center gap-1">
-                    {user.role === 'Team Leader' ? (
-                      <Crown className="w-3 h-3 text-amber-400" />
-                    ) : (
-                      <Shield className="w-3 h-3 text-emerald-400" />
-                    )}
-                    <span className={`text-xs ${user.role === 'Team Leader' ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {user.role} • {user.shiftName}
-                    </span>
-                  </div>
+                  {/* Dropdown Indicator */}
+                  <ChevronUp className={`w-4 h-4 text-slate-400 transition-transform ${isUserDropdownOpen ? 'rotate-180' : ''}`} />
                 </div>
-              </div>
+              </button>
+
+              {/* Dropdown Menu */}
+              {isUserDropdownOpen && (
+                <UserDropdownMenu
+                  theme={theme}
+                  onClose={() => setIsUserDropdownOpen(false)}
+                  setActiveTab={setActiveTab}
+                  setSettingsTab={setSettingsTab}
+                  onOpenFeedback={onOpenFeedback}
+                  onSignOut={onSignOut}
+                  isCollapsed={false}
+                />
+              )}
             </div>
           )}
 
           {/* Collapsed user avatar */}
           {user && isCollapsed && (
-            <div className="flex justify-center mb-3">
-              {user.preferences?.profilePicture ? (
-                <img
-                  src={user.preferences.profilePicture}
-                  alt={user.displayName}
-                  className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30"
-                  title={user.displayName}
+            <div ref={collapsedDropdownRef} className="relative flex justify-center mb-3">
+              <button
+                onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+                className="relative group"
+                title={user.displayName}
+              >
+                {user.preferences?.profilePicture ? (
+                  <img
+                    src={user.preferences.profilePicture}
+                    alt={user.displayName}
+                    className="w-10 h-10 rounded-full object-cover border-2 border-emerald-500/30 hover:border-emerald-500/50 transition-colors"
+                  />
+                ) : (
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all ${
+                      user.role === 'Team Leader'
+                        ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white group-hover:from-amber-300 group-hover:to-amber-500'
+                        : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white group-hover:from-emerald-400 group-hover:to-emerald-600'
+                    }`}
+                  >
+                    {getInitials(user.displayName)}
+                  </div>
+                )}
+              </button>
+
+              {/* Dropdown Menu - positioned to the right */}
+              {isUserDropdownOpen && (
+                <UserDropdownMenu
+                  theme={theme}
+                  onClose={() => setIsUserDropdownOpen(false)}
+                  setActiveTab={setActiveTab}
+                  setSettingsTab={setSettingsTab}
+                  onOpenFeedback={onOpenFeedback}
+                  onSignOut={onSignOut}
+                  isCollapsed={true}
                 />
-              ) : (
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                    user.role === 'Team Leader'
-                      ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
-                      : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
-                  }`}
-                  title={user.displayName}
-                >
-                  {getInitials(user.displayName)}
-                </div>
               )}
             </div>
           )}
@@ -362,57 +508,6 @@ const Sidebar: React.FC<SidebarProps> = ({
             </div>
           )}
 
-          {/* Feedback Button */}
-          {onOpenFeedback && !isCollapsed && (
-            <button
-              onClick={onOpenFeedback}
-              className={`flex items-center gap-3 px-4 py-3 mt-2 text-sm font-medium w-full transition-colors rounded-lg ${
-                theme === 'Midnight'
-                  ? 'text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 border border-indigo-500/30'
-                  : 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 border border-blue-500/30'
-              }`}
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-              <span>Send Feedback</span>
-            </button>
-          )}
-
-          {/* Collapsed feedback icon */}
-          {onOpenFeedback && isCollapsed && (
-            <button
-              onClick={onOpenFeedback}
-              title="Send Feedback"
-              className={`flex items-center justify-center p-3 w-full transition-colors rounded-lg ${
-                theme === 'Midnight'
-                  ? 'text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10'
-                  : 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
-              }`}
-            >
-              <MessageSquarePlus className="h-5 w-5" />
-            </button>
-          )}
-
-          {/* Sign Out Button */}
-          {onSignOut && !isCollapsed && (
-            <button
-              onClick={onSignOut}
-              className="flex items-center gap-3 px-4 py-3 mt-2 text-sm font-medium w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800"
-            >
-              <LogOut className="h-4 w-4" />
-              <span>Sign Out</span>
-            </button>
-          )}
-
-          {/* Collapsed sign out icon */}
-          {onSignOut && isCollapsed && (
-            <button
-              onClick={onSignOut}
-              title="Sign Out"
-              className="flex items-center justify-center p-3 w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800"
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
-          )}
         </div>
       </div>
     </>
