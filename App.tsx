@@ -36,6 +36,8 @@ import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
 import UserManagementSettings from './components/UserManagementSettings';
+import InviteManagementSettings from './components/InviteManagementSettings';
+import InviteAcceptPage from './components/InviteAcceptPage';
 import ToastSystem, { useToasts} from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
@@ -129,8 +131,20 @@ function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [currentUser, setCurrentUser] = useState<CloudUser | null>(null);
 
+  // Invite mode state
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+
   // Toast system
   const toast = useToasts();
+
+  // Check for invite token in URL on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('invite');
+    if (token) {
+      setInviteToken(token);
+    }
+  }, []);
 
   // Track if initial data has been loaded
   const [dataInitialized, setDataInitialized] = useState(false);
@@ -409,7 +423,7 @@ function App() {
   }, [toast]);
 
   // Settings State
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'shifts'>('appearance');
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'task-management' | 'requirements' | 'automation' | 'skills' | 'integrations' | 'data' | 'feedback' | 'profile' | 'team' | 'invites' | 'shifts'>('appearance');
 
   // Active color palette (computed from appearance settings)
   const activePalette = useMemo(() => {
@@ -3990,6 +4004,7 @@ function App() {
            {[
              { id: 'profile', label: 'My Profile', icon: User },
              { id: 'team', label: 'Team Management', icon: Users },
+             { id: 'invites', label: 'Invite Links', icon: UserPlus },
              { id: 'shifts', label: 'Shift Management', icon: Repeat },
              { id: 'integrations', label: 'Integrations', icon: Puzzle },
            ].map((item) => (
@@ -4387,6 +4402,15 @@ function App() {
 
            {settingsTab === 'team' && currentUser && (
               <UserManagementSettings
+                currentUser={currentUser}
+                theme={theme}
+                styles={styles}
+                toast={toast}
+              />
+           )}
+
+           {settingsTab === 'invites' && currentUser && (
+              <InviteManagementSettings
                 currentUser={currentUser}
                 theme={theme}
                 styles={styles}
@@ -8027,6 +8051,24 @@ function App() {
           <p className="text-sm text-slate-400">Checking authentication...</p>
         </div>
       </div>
+    );
+  }
+
+  // --- Invite Accept Screen (With Invite Token) ---
+  if (inviteToken && !currentUser) {
+    return (
+      <InviteAcceptPage
+        token={inviteToken}
+        onSuccess={handleLogin}
+        onCancel={() => {
+          setInviteToken(null);
+          // Clear invite parameter from URL
+          const url = new URL(window.location.href);
+          url.searchParams.delete('invite');
+          window.history.replaceState({}, '', url);
+        }}
+        theme={theme}
+      />
     );
   }
 
