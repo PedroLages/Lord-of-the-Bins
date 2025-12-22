@@ -18,10 +18,11 @@ import {
   Crown,
   Shield,
 } from 'lucide-react';
-import { DemoUser, getInitials, getRoleDisplayText } from '../types';
+import { getInitials, getRoleDisplayText } from '../types';
+import type { CloudUser } from '../services/supabase/authService';
 
 interface ProfileSettingsProps {
-  user: DemoUser;
+  user: CloudUser;
   theme: string;
   styles: {
     text: string;
@@ -29,7 +30,7 @@ interface ProfileSettingsProps {
     card: string;
     [key: string]: string;
   };
-  onUpdateUser: (updates: Partial<Pick<DemoUser, 'displayName' | 'profilePicture' | 'preferences'>>) => Promise<void>;
+  onUpdateUser: (updates: { displayName?: string; email?: string; preferences?: any }) => Promise<void>;
   onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onProcessPicture: (file: File) => Promise<string>;
   toast: {
@@ -49,7 +50,7 @@ export default function ProfileSettings({
 }: ProfileSettingsProps) {
   // Profile state
   const [displayName, setDisplayName] = useState(user.displayName);
-  const [profilePicture, setProfilePicture] = useState(user.profilePicture || '');
+  const [profilePicture, setProfilePicture] = useState(user.preferences?.profilePicture || '');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState(false);
 
@@ -103,7 +104,10 @@ export default function ProfileSettings({
     try {
       await onUpdateUser({
         displayName: displayName.trim(),
-        profilePicture: profilePicture || undefined,
+        preferences: {
+          ...user.preferences,
+          profilePicture: profilePicture || undefined,
+        },
       });
       setProfileSuccess(true);
       toast.success('Profile updated successfully');
@@ -158,7 +162,7 @@ export default function ProfileSettings({
     }
   };
 
-  const hasProfileChanges = displayName !== user.displayName || profilePicture !== (user.profilePicture || '');
+  const hasProfileChanges = displayName !== user.displayName || profilePicture !== (user.preferences?.profilePicture || '');
 
   return (
     <div className="space-y-8">
@@ -183,7 +187,7 @@ export default function ProfileSettings({
                 />
               ) : (
                 <div className={`w-32 h-32 rounded-full flex items-center justify-center text-3xl font-bold shadow-lg ${
-                  user.role === 'team-leader'
+                  user.role === 'Team Leader'
                     ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white'
                     : 'bg-gradient-to-br from-emerald-500 to-emerald-700 text-white'
                 }`}>
@@ -247,9 +251,9 @@ export default function ProfileSettings({
                   ? 'bg-slate-700/30 border-slate-600 text-slate-400'
                   : 'bg-gray-100 border-gray-200 text-gray-500'
               }`}>
-                @{user.username}
+                {user.userCode}
               </div>
-              <p className={`text-xs mt-1 ${styles.muted}`}>Username cannot be changed</p>
+              <p className={`text-xs mt-1 ${styles.muted}`}>User code cannot be changed</p>
             </div>
 
             <div>
@@ -261,15 +265,15 @@ export default function ProfileSettings({
                   ? 'bg-slate-700/30 border-slate-600'
                   : 'bg-gray-100 border-gray-200'
               }`}>
-                {user.role === 'team-leader' ? (
+                {user.role === 'Team Leader' ? (
                   <Crown className="w-4 h-4 text-amber-500" />
                 ) : (
                   <Shield className="w-4 h-4 text-emerald-500" />
                 )}
                 <span className={`${
-                  user.role === 'team-leader' ? 'text-amber-500' : 'text-emerald-500'
+                  user.role === 'Team Leader' ? 'text-amber-500' : 'text-emerald-500'
                 } font-medium`}>
-                  {getRoleDisplayText(user.role)}
+                  {user.role}
                 </span>
               </div>
             </div>
