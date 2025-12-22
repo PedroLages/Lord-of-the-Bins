@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, PanelLeftClose, PanelLeft, Cloud, CloudOff, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Calendar, Users, Settings, LayoutDashboard, Menu, LogOut, ChevronRight, Box, MessageSquarePlus, Crown, Shield, ChevronsLeft, ChevronsRight, Cloud, CloudOff, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { getInitials } from '../types';
 import type { CloudUser } from '../services/supabase/authService';
 import { hybridStorage } from '../services/storage';
@@ -90,7 +90,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         heading: 'text-slate-500',
         accent: 'bg-gradient-to-b from-indigo-400 to-indigo-600',
         footer: 'bg-[#0f172a] border-t border-slate-800',
-        cycleBg: 'bg-gradient-to-br from-indigo-500/20 to-purple-500/10 border-indigo-500/30'
+        cycleBg: 'bg-gradient-to-br from-indigo-500/20 to-purple-500/10 border-indigo-500/30',
+        collapseBtn: 'bg-indigo-500/10 hover:bg-indigo-500/20 border-indigo-500/30 text-indigo-400 hover:text-indigo-300',
+        collapseBtnShadow: 'shadow-lg shadow-indigo-500/10 hover:shadow-indigo-500/20'
       };
     }
     // Modern (default)
@@ -102,7 +104,9 @@ const Sidebar: React.FC<SidebarProps> = ({
       heading: 'text-slate-500',
       accent: 'bg-gradient-to-b from-blue-400 to-blue-600',
       footer: 'border-t border-slate-800/50',
-      cycleBg: 'bg-gradient-to-br from-blue-500/20 to-cyan-500/10 border-blue-500/30'
+      cycleBg: 'bg-gradient-to-br from-blue-500/20 to-cyan-500/10 border-blue-500/30',
+      collapseBtn: 'bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/30 text-blue-400 hover:text-blue-300',
+      collapseBtnShadow: 'shadow-lg shadow-blue-500/10 hover:shadow-blue-500/20'
     };
   };
 
@@ -143,6 +147,61 @@ const Sidebar: React.FC<SidebarProps> = ({
               </button>
             )}
           </div>
+
+          {/* Collapse Toggle Button - Moved to Header (Desktop only) */}
+          {onToggleCollapse && (
+            <div className={`hidden lg:block ${isCollapsed ? 'mt-3' : 'mt-4'}`}>
+              <button
+                onClick={onToggleCollapse}
+                className={`group relative w-full flex items-center justify-center ${isCollapsed ? 'px-2' : 'px-3'} py-2.5 rounded-xl border backdrop-blur-sm transition-all duration-300 ${styles.collapseBtn} ${styles.collapseBtnShadow}`}
+                aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-expanded={!isCollapsed}
+              >
+                {/* Animated Icon Container */}
+                <div className="relative flex items-center justify-center">
+                  {/* Expand Icon - Shows when collapsed */}
+                  <ChevronsRight
+                    className={`h-5 w-5 transition-all duration-300 ${
+                      isCollapsed
+                        ? 'opacity-100 scale-100 rotate-0'
+                        : 'opacity-0 scale-75 -rotate-90 absolute'
+                    }`}
+                  />
+
+                  {/* Collapse Icon - Shows when expanded */}
+                  <ChevronsLeft
+                    className={`h-5 w-5 transition-all duration-300 ${
+                      !isCollapsed
+                        ? 'opacity-100 scale-100 rotate-0'
+                        : 'opacity-0 scale-75 rotate-90 absolute'
+                    }`}
+                  />
+                </div>
+
+                {/* Text Label - Only visible when expanded */}
+                {!isCollapsed && (
+                  <span className="ml-2.5 text-xs font-semibold uppercase tracking-wider transition-opacity duration-300">
+                    Collapse
+                  </span>
+                )}
+
+                {/* Hover Indicator Line */}
+                <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1 rounded-l-full transition-all duration-300 ${
+                  theme === 'Midnight'
+                    ? 'bg-gradient-to-b from-indigo-400 to-indigo-600'
+                    : 'bg-gradient-to-b from-blue-400 to-blue-600'
+                } h-0 group-hover:h-6`} />
+
+                {/* Tooltip for collapsed state */}
+                {isCollapsed && (
+                  <div className="absolute left-full ml-3 px-3 py-1.5 bg-slate-800 text-white text-xs font-medium rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 whitespace-nowrap pointer-events-none z-50 shadow-lg">
+                    Expand sidebar
+                    <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800"></div>
+                  </div>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Current Cycle - Prominent Position */}
           {!isCollapsed && (
@@ -352,25 +411,6 @@ const Sidebar: React.FC<SidebarProps> = ({
               className="flex items-center justify-center p-3 w-full transition-colors rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800"
             >
               <LogOut className="h-5 w-5" />
-            </button>
-          )}
-
-          {/* Collapse Toggle Button - Desktop only */}
-          {onToggleCollapse && (
-            <button
-              onClick={onToggleCollapse}
-              className={`hidden lg:flex items-center justify-center p-2.5 mt-3 w-full transition-colors rounded-lg ${
-                theme === 'Midnight'
-                  ? 'text-slate-500 hover:text-slate-400 hover:bg-slate-800/50'
-                  : 'text-slate-500 hover:text-slate-400 hover:bg-slate-800/50'
-              }`}
-              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              {isCollapsed ? (
-                <PanelLeft className="h-5 w-5" />
-              ) : (
-                <PanelLeftClose className="h-5 w-5" />
-              )}
             </button>
           )}
         </div>
