@@ -13,7 +13,7 @@ import {
   Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X,
   Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
   Palmtree, Thermometer, GraduationCap, CircleDashed,
-  CalendarX2, Shuffle, Scale, GripVertical, Command,
+  CalendarX2, Shuffle, Scale, GripVertical, Command, CalendarClock,
   UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Info
 } from 'lucide-react';
 import {
@@ -23,7 +23,7 @@ import {
   isTCTask, getTCFixedColor,
   type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
-  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
+  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement, type ScheduleConflict, type ConflictResolution
 } from './types';
 import { getCurrentUser, getCachedUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
 import { hybridStorage } from './services/storage';
@@ -32,6 +32,7 @@ import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
 import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
+import ConflictResolutionWizard from './components/ConflictResolutionWizard';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
@@ -41,7 +42,7 @@ import InviteAcceptPage from './components/InviteAcceptPage';
 import ToastSystem, { useToasts} from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
-import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule } from './services/schedulingService';
+import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule, generateResolutions } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
   ActivityLogEntry,
@@ -296,6 +297,11 @@ function App() {
   const [weeklyPlanningConfigs, setWeeklyPlanningConfigs] = useState<Record<string, WeeklyPlanningConfig>>({});
   const [weeklyExclusions, setWeeklyExclusions] = useState<Record<string, WeeklyExclusions>>({});
   const [planningTemplates, setPlanningTemplates] = useState<PlanningTemplate[]>([]);
+
+  // Conflict Resolution Wizard State
+  const [showConflictWizard, setShowConflictWizard] = useState(false);
+  const [scheduleConflicts, setScheduleConflicts] = useState<ScheduleConflict[]>([]);
+  const [conflictResolutions, setConflictResolutions] = useState<ConflictResolution[]>([]);
 
   // Feedback Modal State
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -785,12 +791,19 @@ function App() {
 
       setOperators(prev => prev.map(o => o.id === op.id ? op : o));
 
+      // Immediately sync individual operator changes to cloud
+      saveOperator(op).catch(err => console.error('Failed to sync operator to cloud:', err));
+
       if (changes.length > 0) {
         const entry = logOperatorUpdated(op.name, changes.join(', '));
         setActivityLog(prev => [entry, ...prev]);
       }
     } else {
       setOperators(prev => [...prev, op]);
+
+      // Sync new operator to cloud
+      saveOperator(op).catch(err => console.error('Failed to sync new operator to cloud:', err));
+
       const entry = logOperatorAdded(op.name);
       setActivityLog(prev => [entry, ...prev]);
     }
@@ -2000,20 +2013,45 @@ function App() {
 
     // Run the fill gaps algorithm to generate preview
     // Only consider tasks that have Task Requirements configured (Task Staffing settings)
-    const configuredTasks = tasks.filter(t => taskRequirements.some(r => r.taskId === t.id));
+    // AND exclude Heavy tasks (manually planned by TCs)
+    const configuredTasks = tasks.filter(t => {
+      // Must have task requirements configured
+      if (!taskRequirements.some(r => r.taskId === t.id)) return false;
+
+      // Exclude Heavy tasks - these are manually planned by TCs
+      const isHeavyTask = schedulingRules.heavyTasks?.includes(t.name);
+      if (isHeavyTask) return false;
+
+      return true;
+    });
 
     // Log which tasks are being considered
-    console.log('[Fill Gaps] Using only configured tasks:', configuredTasks.map(t => t.name));
+    console.log('[Fill Gaps] Using soft/easy tasks only:', configuredTasks.map(t => t.name));
     console.log('[Fill Gaps] Skipping tasks without requirements:',
       tasks.filter(t => !taskRequirements.some(r => r.taskId === t.id)).map(t => t.name)
     );
+    console.log('[Fill Gaps] Excluding Heavy tasks (TC-planned):',
+      tasks.filter(t => schedulingRules.heavyTasks?.includes(t.name)).map(t => t.name)
+    );
 
     if (configuredTasks.length === 0) {
-      toast.warning(
-        'No Task Requirements',
-        'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
-        { duration: 6000 }
-      );
+      // Check if it's because all tasks are Heavy or no requirements configured
+      const hasHeavyTasks = tasks.some(t => schedulingRules.heavyTasks?.includes(t.name));
+      const hasRequirements = tasks.some(t => taskRequirements.some(r => r.taskId === t.id));
+
+      if (hasRequirements && hasHeavyTasks) {
+        toast.warning(
+          'No Soft Tasks Available',
+          'All configured tasks are marked as Heavy (TC-planned). Fill Gaps only assigns soft/easy tasks. Remove some tasks from Heavy category or add soft task requirements.',
+          { duration: 6000 }
+        );
+      } else {
+        toast.warning(
+          'No Task Requirements',
+          'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
+          { duration: 6000 }
+        );
+      }
       return;
     }
 
@@ -2077,6 +2115,119 @@ function App() {
         `${appliedCount} gap${appliedCount > 1 ? 's' : ''} filled in the schedule`
       );
     }
+  };
+
+  // Detect conflicts and open the Conflict Resolution Wizard
+  const handleDetectConflicts = () => {
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
+    currentWeek.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+
+    // Get schedule warnings
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+
+    // Convert warnings to conflicts
+    const conflicts: ScheduleConflict[] = warnings.map((warning, index) => ({
+      id: `conflict-${index}-${Date.now()}`,
+      type: warning.type === 'skill_mismatch' ? 'skill-mismatch' :
+            warning.type === 'availability_conflict' ? 'availability' :
+            warning.type === 'double_assignment' ? 'double-assignment' :
+            warning.type === 'understaffed' ? 'understaffed' : 'skill-mismatch',
+      severity: (warning.type === 'skill_mismatch' || warning.type === 'availability_conflict' || warning.type === 'double_assignment') ? 'critical' : 'warning',
+      day: warning.day || 'Mon',
+      operatorId: warning.operatorId,
+      operatorName: warning.operatorId ? operators.find(o => o.id === warning.operatorId)?.name : undefined,
+      taskId: warning.taskId,
+      taskName: warning.taskId ? tasks.find(t => t.id === warning.taskId)?.name : undefined,
+      message: warning.message,
+    }));
+
+    if (conflicts.length === 0) {
+      toast.success('No Conflicts Found', 'Your schedule has no conflicts!');
+      return;
+    }
+
+    // Generate resolution proposals
+    const resolutions = generateResolutions(warnings, assignmentsMap, operators, tasks, daysList);
+
+    setScheduleConflicts(conflicts);
+    setConflictResolutions(resolutions);
+    setShowConflictWizard(true);
+  };
+
+  // Apply a selected resolution
+  const handleApplyResolution = (resolution: ConflictResolution) => {
+    const updatedDays = [...currentWeek.days];
+
+    resolution.actions.forEach(action => {
+      const dayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(action.day);
+      if (dayIndex === -1) return;
+
+      const dayAssignments = { ...updatedDays[dayIndex].assignments };
+
+      switch (action.type) {
+        case 'swap': {
+          if (!action.operator1Id || !action.operator2Id) break;
+
+          const op1Assignment = dayAssignments[action.operator1Id];
+          const op2Assignment = dayAssignments[action.operator2Id];
+
+          // Swap the task assignments
+          dayAssignments[action.operator1Id] = {
+            ...op1Assignment,
+            taskId: action.task2Id
+          };
+          dayAssignments[action.operator2Id] = {
+            ...op2Assignment,
+            taskId: action.task1Id
+          };
+          break;
+        }
+
+        case 'assign': {
+          if (!action.operatorId || !action.taskId) break;
+          dayAssignments[action.operatorId] = {
+            taskId: action.taskId,
+            locked: false
+          };
+          break;
+        }
+
+        case 'unassign': {
+          if (!action.operatorId) break;
+          dayAssignments[action.operatorId] = {
+            taskId: null,
+            locked: false
+          };
+          break;
+        }
+
+        case 'ignore':
+          // Do nothing - just acknowledge the conflict
+          break;
+      }
+
+      updatedDays[dayIndex] = {
+        ...updatedDays[dayIndex],
+        assignments: dayAssignments
+      };
+    });
+
+    const newSchedule = { ...currentWeek, days: updatedDays };
+    updateWeek(newSchedule);
+
+    // Re-validate after applying resolution
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
+    setScheduleWarnings(warnings);
+
+    toast.success('Resolution Applied', 'Conflict resolution has been applied to the schedule');
   };
 
   // Handle applying the planning modal configuration and running smart fill
@@ -6738,7 +6889,7 @@ function App() {
 
         {/* Warnings Card - Dynamic severity-based styling */}
         <button
-          onClick={() => setShowWarningsModal(true)}
+          onClick={handleDetectConflicts}
           className={`p-4 rounded-xl shadow-lg flex items-center gap-4 text-left transition-all hover:scale-[1.02] ${
             hasCriticalWarnings
               ? (theme === 'Midnight'
@@ -7003,31 +7154,28 @@ function App() {
            </div>
 
            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              {/* Plan Requirements Button */}
+              {/* Plan the Week Button */}
               <button
                 onClick={() => setShowPlanningModal(true)}
-                disabled={currentWeek.locked}
-                className={`group relative flex items-center justify-center gap-2 px-4 py-2.5 transition-all overflow-hidden flex-1 sm:flex-initial ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={currentWeek.locked ? 'Unlock schedule to plan' : 'Configure staffing requirements before Smart Fill'}
+                className={`group relative flex items-center justify-center gap-2 px-4 py-2.5 transition-all shadow-md hover:shadow-lg overflow-hidden flex-1 sm:flex-initial ${styles.primaryBtn}`}
               >
-                <Layers className="h-4 w-4 opacity-90" />
+                <CalendarClock className="h-4 w-4 opacity-90" />
                 <span className="font-medium text-sm whitespace-nowrap">Plan the Week</span>
               </button>
 
-              {/* Smart Fill Button */}
-              <button
-                onClick={handleAutoSchedule}
-                disabled={isGenerating || currentWeek.locked}
-                className={`group relative flex items-center justify-center gap-2 px-5 py-2.5 transition-all shadow-md hover:shadow-lg disabled:shadow-none overflow-hidden flex-1 sm:flex-initial ${styles.primaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={currentWeek.locked ? 'Unlock schedule to edit' : 'Auto-fill schedule'}
+              {/* Fill Gaps Button - Icon only with tooltip */}
+              <Tooltip
+                content={currentWeek.locked ? 'Unlock schedule to fill gaps' : 'Fill the Gaps'}
+                position="bottom"
               >
-                {isGenerating ? (
-                  <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4 opacity-90" />
-                )}
-                <span className="font-medium text-sm whitespace-nowrap">Smart Fill</span>
-              </button>
+                <button
+                  onClick={handleFillGaps}
+                  disabled={currentWeek.locked}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <Zap className="h-5 w-5" />
+                </button>
+              </Tooltip>
 
               <Tooltip content={currentWeek.locked ? 'Unlock schedule to clear' : 'Clear all assignments'} position="bottom">
                 <button
@@ -9362,6 +9510,18 @@ function App() {
         onSubmit={handleSubmitFeedback}
         currentPage={activeTab}
         isDark={theme === 'Midnight'}
+      />
+
+      {/* Conflict Resolution Wizard */}
+      <ConflictResolutionWizard
+        isOpen={showConflictWizard}
+        onClose={() => setShowConflictWizard(false)}
+        conflicts={scheduleConflicts}
+        resolutions={conflictResolutions}
+        operators={operators}
+        tasks={tasks}
+        onApplyResolution={handleApplyResolution}
+        theme={theme}
       />
 
       {/* Clear Data Confirmation Modal */}

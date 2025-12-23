@@ -18,6 +18,8 @@ export interface SchedulingRules {
   useV2Algorithm: boolean; // Use enhanced V2 algorithm with decay scoring and early filtering
   prioritizeSkillVariety: boolean; // V2: Prioritize using all of operator's skills across the week
   algorithm?: SchedulingAlgorithm; // Which scheduling algorithm to use
+  heavyTasks?: string[]; // Tasks marked as "Heavy" (max 1 consecutive day)
+  softTasks?: string[]; // Tasks marked as "Soft" (max 2 consecutive days)
 }
 
 export const DEFAULT_RULES: SchedulingRules = {
@@ -1023,17 +1025,26 @@ export function fillGapsSchedule(
       // Skip if operator unavailable
       if (!operator.availability[day]) continue;
 
-      // Find eligible tasks (has skill match)
-      const eligibleTasks = tasks.filter(task =>
-        operator.skills.includes(task.requiredSkill)
-      );
+      // Find eligible tasks (has skill match AND not a Heavy task)
+      // Fill Gaps should ONLY assign soft/easy tasks
+      // Heavy tasks (hard skills) are manually distributed by TCs and shouldn't be auto-filled
+      const eligibleTasks = tasks.filter(task => {
+        // Must have skill match
+        if (!operator.skills.includes(task.requiredSkill)) return false;
+
+        // Exclude Heavy tasks - these are manually planned by TCs
+        const isHeavyTask = rules.heavyTasks?.includes(task.name);
+        if (isHeavyTask) return false;
+
+        return true;
+      });
 
       if (eligibleTasks.length === 0) {
         unfillableGaps.push({
           day,
           operatorId: operator.id,
           operatorName: operator.name,
-          reason: 'No tasks match operator skills'
+          reason: 'No eligible soft tasks (Heavy tasks excluded from Fill Gaps)'
         });
         continue;
       }
@@ -1513,13 +1524,28 @@ function calculateAssignmentScoreV2(
 
   // Only apply decay scoring if NOT a Flex with single skill
   if (consecutiveDays > 0 && !isFlexWithSingleSkill) {
-    if (consecutiveDays >= rules.maxConsecutiveDaysOnSameTask) {
+    // Determine max consecutive days based on task category
+    let maxConsecutiveDays = rules.maxConsecutiveDaysOnSameTask; // Default
+
+    const isHeavyTask = rules.heavyTasks?.includes(task.name);
+    const isSoftTask = rules.softTasks?.includes(task.name);
+
+    if (isHeavyTask) {
+      maxConsecutiveDays = 1; // Heavy tasks: max 1 consecutive day
+    } else if (isSoftTask) {
+      maxConsecutiveDays = 2; // Soft tasks: max 2 consecutive days
+    } else {
+      maxConsecutiveDays = 1; // Normal tasks: max 1 consecutive day (default)
+    }
+
+    if (consecutiveDays >= maxConsecutiveDays) {
       // HARD BLOCK at max consecutive days
+      const category = isHeavyTask ? 'Heavy' : isSoftTask ? 'Soft' : 'Normal';
       return {
         operatorId: operator.id,
         taskId: task.id,
         score: 0,
-        reasons: [`Already ${consecutiveDays} consecutive days on ${task.name}`],
+        reasons: [`Already ${consecutiveDays} consecutive days on ${task.name} (${category}: max ${maxConsecutiveDays})`],
       };
     } else {
       // DECAY PENALTY: -6 points per consecutive day
@@ -1751,4 +1777,234 @@ function evaluateSoftRules(
   }
 
   return brokenRules;
+}
+
+/**
+ * Generate smart resolution proposals for schedule conflicts
+ * Analyzes conflicts detected by validateSchedule() and proposes solutions
+ */
+export function generateResolutions(
+  warnings: ScheduleWarning[],
+  assignments: Record<string, Record<string, ScheduleAssignment>>, // dayIndex -> operatorId -> assignment
+  operators: Operator[],
+  tasks: TaskType[],
+  days: WeekDay[]
+): import('../types').ConflictResolution[] {
+  const resolutions: import('../types').ConflictResolution[] = [];
+
+  warnings.forEach((warning, index) => {
+    const conflictId = `conflict-${index}-${Date.now()}`;
+
+    switch (warning.type) {
+      case 'skill_mismatch': {
+        // Operator doesn't have the required skill
+        if (!warning.operatorId || !warning.taskId || !warning.day) break;
+
+        const operator = operators.find(o => o.id === warning.operatorId);
+        const task = tasks.find(t => t.id === warning.taskId);
+        if (!operator || !task) break;
+
+        const dayIndex = days.indexOf(warning.day);
+        if (dayIndex === -1) break;
+
+        // Option 1: Swap with another operator who has the skill and is available
+        const candidatesForSwap = operators.filter(op =>
+          op.id !== operator.id &&
+          op.skills.includes(task.requiredSkill) &&
+          op.availability[warning.day] &&
+          op.status === 'Active'
+        );
+
+        candidatesForSwap.forEach(candidate => {
+          const candidateAssignment = assignments[dayIndex]?.[candidate.id];
+          const candidateTaskId = candidateAssignment?.taskId || null;
+          const candidateTask = candidateTaskId ? tasks.find(t => t.id === candidateTaskId) : null;
+
+          // Check if original operator has skill for candidate's task (if any)
+          if (!candidateTaskId || (candidateTask && operator.skills.includes(candidateTask.requiredSkill))) {
+            resolutions.push({
+              conflictId,
+              actions: [{
+                type: 'swap',
+                day: warning.day,
+                operator1Id: operator.id,
+                task1Id: warning.taskId,
+                operator2Id: candidate.id,
+                task2Id: candidateTaskId,
+                description: `Swap ${operator.name} (${task.name}) with ${candidate.name} (${candidateTask?.name || 'Unassigned'}) on ${warning.day}`,
+              }],
+              resolves: [`Skill mismatch: ${operator.name} lacks ${task.requiredSkill}`],
+              introduces: [],
+              confidence: 90,
+            });
+          }
+        });
+
+        // Option 2: Unassign the operator (remove the problematic assignment)
+        resolutions.push({
+          conflictId,
+          actions: [{
+            type: 'unassign',
+            day: warning.day,
+            operatorId: operator.id,
+            taskId: null,
+            description: `Unassign ${operator.name} from ${task.name} on ${warning.day}`,
+          }],
+          resolves: [`Skill mismatch: ${operator.name} lacks ${task.requiredSkill}`],
+          introduces: [`${task.name} may become understaffed on ${warning.day}`],
+          confidence: 70,
+        });
+        break;
+      }
+
+      case 'availability_conflict': {
+        // Operator not available on this day
+        if (!warning.operatorId || !warning.day) break;
+
+        const operator = operators.find(o => o.id === warning.operatorId);
+        if (!operator) break;
+
+        const dayIndex = days.indexOf(warning.day);
+        if (dayIndex === -1) break;
+
+        const assignment = assignments[dayIndex]?.[operator.id];
+        if (!assignment?.taskId) break;
+
+        const task = tasks.find(t => t.id === assignment.taskId);
+        if (!task) break;
+
+        // Option: Unassign the unavailable operator
+        resolutions.push({
+          conflictId,
+          actions: [{
+            type: 'unassign',
+            day: warning.day,
+            operatorId: operator.id,
+            taskId: null,
+            description: `Unassign ${operator.name} (unavailable) from ${task.name} on ${warning.day}`,
+          }],
+          resolves: [`Availability: ${operator.name} not available on ${warning.day}`],
+          introduces: [`${task.name} may become understaffed on ${warning.day}`],
+          confidence: 85,
+        });
+        break;
+      }
+
+      case 'understaffed': {
+        // Task needs more operators
+        if (!warning.taskId || !warning.day) break;
+
+        const task = tasks.find(t => t.id === warning.taskId);
+        if (!task) break;
+
+        const dayIndex = days.indexOf(warning.day);
+        if (dayIndex === -1) break;
+
+        // Find unassigned operators with the required skill
+        const unassignedCandidates = operators.filter(op => {
+          const assignment = assignments[dayIndex]?.[op.id];
+          return (
+            (!assignment || !assignment.taskId) && // Unassigned
+            op.skills.includes(task.requiredSkill) && // Has skill
+            op.availability[warning.day] && // Available
+            op.status === 'Active' // Active
+          );
+        });
+
+        unassignedCandidates.forEach(candidate => {
+          resolutions.push({
+            conflictId,
+            actions: [{
+              type: 'assign',
+              day: warning.day,
+              operatorId: candidate.id,
+              taskId: task.id,
+              description: `Assign ${candidate.name} to ${task.name} on ${warning.day}`,
+            }],
+            resolves: [`Understaffed: ${task.name} on ${warning.day}`],
+            introduces: [],
+            confidence: 85,
+          });
+        });
+        break;
+      }
+
+      case 'double_assignment': {
+        // Operator assigned to multiple tasks on same day
+        if (!warning.operatorId || !warning.day) break;
+
+        const operator = operators.find(o => o.id === warning.operatorId);
+        if (!operator) break;
+
+        const dayIndex = days.indexOf(warning.day);
+        if (dayIndex === -1) break;
+
+        // Find all tasks this operator is assigned to on this day
+        const assignment = assignments[dayIndex]?.[operator.id];
+        if (!assignment?.taskId) break;
+
+        const task = tasks.find(t => t.id === assignment.taskId);
+        if (!task) break;
+
+        // Option: Unassign from one of the tasks
+        resolutions.push({
+          conflictId,
+          actions: [{
+            type: 'unassign',
+            day: warning.day,
+            operatorId: operator.id,
+            taskId: null,
+            description: `Unassign ${operator.name} from ${task.name} on ${warning.day}`,
+          }],
+          resolves: [`Double assignment: ${operator.name} on ${warning.day}`],
+          introduces: [`${task.name} may become understaffed on ${warning.day}`],
+          confidence: 75,
+        });
+        break;
+      }
+
+      case 'overstaffed': {
+        // Task has more operators than needed
+        if (!warning.taskId || !warning.day) break;
+
+        const task = tasks.find(t => t.id === warning.taskId);
+        if (!task) break;
+
+        const dayIndex = days.indexOf(warning.day);
+        if (dayIndex === -1) break;
+
+        // Find operators assigned to this task
+        const assignedOperators = operators.filter(op => {
+          const assignment = assignments[dayIndex]?.[op.id];
+          return assignment?.taskId === task.id;
+        });
+
+        // Suggest unassigning one operator (preferably non-locked)
+        const nonLockedOps = assignedOperators.filter(op => {
+          const assignment = assignments[dayIndex]?.[op.id];
+          return !assignment?.locked && !assignment?.pinned;
+        });
+
+        const opToUnassign = nonLockedOps[0] || assignedOperators[0];
+        if (opToUnassign) {
+          resolutions.push({
+            conflictId,
+            actions: [{
+              type: 'unassign',
+              day: warning.day,
+              operatorId: opToUnassign.id,
+              taskId: null,
+              description: `Unassign ${opToUnassign.name} from ${task.name} on ${warning.day}`,
+            }],
+            resolves: [`Overstaffed: ${task.name} on ${warning.day}`],
+            introduces: [],
+            confidence: 80,
+          });
+        }
+        break;
+      }
+    }
+  });
+
+  return resolutions;
 }
