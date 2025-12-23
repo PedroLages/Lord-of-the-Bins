@@ -7972,23 +7972,6 @@ function App() {
               ))}
             </tbody>
           </table>
-
-          {/* Drag Preview Overlay */}
-          <DragOverlay>
-            {dragInfo?.taskId && (() => {
-              const task = tasks.find(t => t.id === dragInfo.taskId);
-              return task ? (
-                <div
-                  style={getTaskStyle(task.id)}
-                  className="px-3 py-2 rounded-lg shadow-2xl border-2 border-white/20 backdrop-blur-sm cursor-grabbing"
-                >
-                  <span className="text-xs font-bold text-center leading-tight opacity-90">
-                    {task.name}
-                  </span>
-                </div>
-              ) : null;
-            })()}
-          </DragOverlay>
           </DndContext>
         </div>
       </div>
