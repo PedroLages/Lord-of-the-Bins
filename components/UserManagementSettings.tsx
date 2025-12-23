@@ -73,6 +73,14 @@ export default function UserManagementSettings({
     userName: string;
     temporaryPassword: string;
   } | null>(null);
+  const [confirmDeactivateModal, setConfirmDeactivateModal] = useState<{
+    userId: string;
+    userName: string;
+  } | null>(null);
+  const [confirmResetPasswordModal, setConfirmResetPasswordModal] = useState<{
+    userId: string;
+    userName: string;
+  } | null>(null);
 
   // Load team members on mount
   useEffect(() => {
@@ -120,12 +128,17 @@ export default function UserManagementSettings({
     }
   };
 
-  const handleDeactivate = async (userId: string, userName: string) => {
-    if (!confirm(`Are you sure you want to deactivate ${userName}? They will not be able to log in.`)) {
-      return;
-    }
+  const handleDeactivate = (userId: string, userName: string) => {
+    setConfirmDeactivateModal({ userId, userName });
+  };
 
+  const confirmDeactivate = async () => {
+    if (!confirmDeactivateModal) return;
+
+    const { userId, userName } = confirmDeactivateModal;
+    setConfirmDeactivateModal(null);
     setActioningUserId(userId);
+
     try {
       await deactivateUser(userId);
       toast.success(`${userName} has been deactivated`);
@@ -152,12 +165,17 @@ export default function UserManagementSettings({
     }
   };
 
-  const handleResetPassword = async (userId: string, userName: string) => {
-    if (!confirm(`Reset password for ${userName}?\n\nA temporary password will be generated. You'll need to write it down and give it to them in person.`)) {
-      return;
-    }
+  const handleResetPassword = (userId: string, userName: string) => {
+    setConfirmResetPasswordModal({ userId, userName });
+  };
 
+  const confirmResetPassword = async () => {
+    if (!confirmResetPasswordModal) return;
+
+    const { userId, userName } = confirmResetPasswordModal;
+    setConfirmResetPasswordModal(null);
     setActioningUserId(userId);
+
     try {
       const { temporaryPassword, userCode } = await generateTemporaryPassword(userId);
 
@@ -646,6 +664,181 @@ export default function UserManagementSettings({
                 }`}
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deactivate Confirmation Modal */}
+      {confirmDeactivateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div
+            className={`max-w-md w-full rounded-xl border shadow-2xl ${
+              theme === 'Midnight'
+                ? 'bg-slate-800 border-slate-700'
+                : 'bg-white border-gray-200'
+            }`}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2 rounded-lg ${
+                    theme === 'Midnight' ? 'bg-red-500/20' : 'bg-red-100'
+                  }`}
+                >
+                  <UserMinus
+                    className={`w-5 h-5 ${
+                      theme === 'Midnight' ? 'text-red-400' : 'text-red-600'
+                    }`}
+                  />
+                </div>
+                <h3 className={`text-lg font-bold ${styles.text}`}>
+                  Deactivate User
+                </h3>
+              </div>
+              <button
+                onClick={() => setConfirmDeactivateModal(null)}
+                className={`p-1 rounded-lg transition-colors ${
+                  theme === 'Midnight'
+                    ? 'hover:bg-slate-700 text-gray-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+                }`}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              <div
+                className={`p-4 rounded-lg border ${
+                  theme === 'Midnight'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-red-50 border-red-200'
+                }`}
+              >
+                <p className={`text-sm font-medium mb-2 ${styles.text}`}>
+                  Are you sure you want to deactivate {confirmDeactivateModal.userName}?
+                </p>
+                <ul className={`text-sm space-y-1 ${styles.muted}`}>
+                  <li>• They will not be able to log in</li>
+                  <li>• Their account data will be preserved</li>
+                  <li>• You can reactivate them later if needed</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-slate-700">
+              <button
+                onClick={() => setConfirmDeactivateModal(null)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-slate-700 hover:bg-slate-600 text-gray-300'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeactivate}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-red-600 hover:bg-red-500 text-white'
+                    : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+              >
+                Deactivate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Confirmation Modal */}
+      {confirmResetPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div
+            className={`max-w-md w-full rounded-xl border shadow-2xl ${
+              theme === 'Midnight'
+                ? 'bg-slate-800 border-slate-700'
+                : 'bg-white border-gray-200'
+            }`}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2 rounded-lg ${
+                    theme === 'Midnight' ? 'bg-amber-500/20' : 'bg-amber-100'
+                  }`}
+                >
+                  <Key
+                    className={`w-5 h-5 ${
+                      theme === 'Midnight' ? 'text-amber-400' : 'text-amber-600'
+                    }`}
+                  />
+                </div>
+                <h3 className={`text-lg font-bold ${styles.text}`}>
+                  Reset Password
+                </h3>
+              </div>
+              <button
+                onClick={() => setConfirmResetPasswordModal(null)}
+                className={`p-1 rounded-lg transition-colors ${
+                  theme === 'Midnight'
+                    ? 'hover:bg-slate-700 text-gray-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+                }`}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              <div
+                className={`p-4 rounded-lg border ${
+                  theme === 'Midnight'
+                    ? 'bg-amber-500/10 border-amber-500/30'
+                    : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                <p className={`text-sm font-medium mb-2 ${styles.text}`}>
+                  Reset password for {confirmResetPasswordModal.userName}?
+                </p>
+                <ul className={`text-sm space-y-1 ${styles.muted}`}>
+                  <li>• A temporary password will be generated</li>
+                  <li>• You'll need to write it down and give it to them in person</li>
+                  <li>• They must change it on their next login</li>
+                  <li>• Their old password will no longer work</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-slate-700">
+              <button
+                onClick={() => setConfirmResetPasswordModal(null)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-slate-700 hover:bg-slate-600 text-gray-300'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmResetPassword}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  theme === 'Midnight'
+                    ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                    : 'bg-amber-600 hover:bg-amber-700 text-white'
+                }`}
+              >
+                Reset Password
               </button>
             </div>
           </div>
