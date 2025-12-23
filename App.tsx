@@ -2018,14 +2018,10 @@ function App() {
     }
 
     // Transform currentWeek to assignments map
+    // Format: Record<dayIndex, Record<operatorId, ScheduleAssignment>>
     const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-    currentWeek.days.forEach((day) => {
-      Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
-        if (!currentAssignmentsMap[opId]) {
-          currentAssignmentsMap[opId] = {};
-        }
-        currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
-      });
+    currentWeek.days.forEach((day, dayIndex) => {
+      currentAssignmentsMap[dayIndex] = day.assignments;
     });
 
     const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -2064,6 +2060,15 @@ function App() {
     setCurrentWeek(newSchedule);
     setShowFillGapsPreview(false);
     setFillGapsResult(null);
+
+    // Re-validate the schedule after applying Fill Gaps
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
+    setScheduleWarnings(warnings);
 
     // Show toast notification
     if (appliedCount > 0) {

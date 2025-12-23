@@ -934,26 +934,212 @@ export function validatePlanBuilderRequirements(
 
 /**
  * Fill empty gaps in schedule
+ * Finds all empty cells and fills them with best-fit assignments using V2 scoring
+ * Respects locked/pinned assignments and soft rules
  */
 export function fillGapsSchedule(
-  _operators: Operator[],
-  _tasks: TaskType[],
-  _days: WeekDay[],
-  _currentAssignments: Record<string, Record<string, ScheduleAssignment>>,
-  _rules: SchedulingRules,
-  _settings: FillGapsSettings
+  operators: Operator[],
+  tasks: TaskType[],
+  days: WeekDay[],
+  currentAssignments: Record<string, Record<string, ScheduleAssignment>>,
+  rules: SchedulingRules,
+  settings: FillGapsSettings
 ): FillGapsResult {
-  // Stub - return empty result
+  const assignments: FillGapsAssignment[] = [];
+  const unfillableGaps: UnfillableGap[] = [];
+
+  // Initialize tracking structures (same as V2 algorithm)
+  const operatorTaskHistory: Record<string, string[]> = {};
+  const operatorTaskCount: Record<string, number> = {};
+  const operatorHeavyTaskCount: Record<string, number> = {};
+  const operatorSkillsUsed: Record<string, Record<string, number>> = {};
+  const taskTypeAssignments: Record<string, Record<string, number>> = {};
+
+  // Pre-populate tracking with existing assignments
+  operators.forEach(op => {
+    operatorTaskHistory[op.id] = [];
+    operatorTaskCount[op.id] = 0;
+    operatorHeavyTaskCount[op.id] = 0;
+    operatorSkillsUsed[op.id] = {};
+  });
+
+  // Build tracking state from existing assignments
+  days.forEach((day, dayIndex) => {
+    const dayAssignments = currentAssignments[dayIndex] || {};
+
+    Object.entries(dayAssignments).forEach(([opId, assignment]) => {
+      if (assignment.taskId) {
+        // Track task history
+        if (!operatorTaskHistory[opId]) operatorTaskHistory[opId] = [];
+        operatorTaskHistory[opId].push(assignment.taskId);
+
+        // Track task count
+        operatorTaskCount[opId] = (operatorTaskCount[opId] || 0) + 1;
+
+        // Track heavy task count
+        const task = tasks.find(t => t.id === assignment.taskId);
+        if (task && HEAVY_TASKS.includes(task.name)) {
+          operatorHeavyTaskCount[opId] = (operatorHeavyTaskCount[opId] || 0) + 1;
+        }
+
+        // Track skill usage
+        if (task) {
+          const skill = task.requiredSkill;
+          if (!operatorSkillsUsed[opId]) operatorSkillsUsed[opId] = {};
+          operatorSkillsUsed[opId][skill] = (operatorSkillsUsed[opId][skill] || 0) + 1;
+        }
+
+        // Track task type assignments
+        if (task) {
+          if (!taskTypeAssignments[task.id]) {
+            taskTypeAssignments[task.id] = { Regular: 0, Flex: 0, Coordinator: 0 };
+          }
+          const operator = operators.find(o => o.id === opId);
+          if (operator) {
+            taskTypeAssignments[task.id][operator.type] = (taskTypeAssignments[task.id][operator.type] || 0) + 1;
+          }
+        }
+      }
+    });
+  });
+
+  // Iterate through all operators and days to find gaps
+  for (const operator of operators) {
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
+      const day = days[dayIndex];
+
+      // Check if this cell is a gap
+      const existingAssignment = currentAssignments[dayIndex]?.[operator.id];
+
+      // Skip if locked or pinned
+      if (existingAssignment?.locked || existingAssignment?.pinned) continue;
+
+      // Skip if already assigned
+      if (existingAssignment?.taskId !== null && existingAssignment?.taskId !== undefined) continue;
+
+      // Skip if operator unavailable
+      if (!operator.availability[day]) continue;
+
+      // Find eligible tasks (has skill match)
+      const eligibleTasks = tasks.filter(task =>
+        operator.skills.includes(task.requiredSkill)
+      );
+
+      if (eligibleTasks.length === 0) {
+        unfillableGaps.push({
+          day,
+          operatorId: operator.id,
+          operatorName: operator.name,
+          reason: 'No tasks match operator skills'
+        });
+        continue;
+      }
+
+      // Score each eligible task
+      const scoredTasks = eligibleTasks.map(task => {
+        const score = calculateAssignmentScoreV2(
+          operator,
+          task,
+          day,
+          dayIndex,
+          {
+            operatorTaskHistory,
+            operatorTaskCount,
+            operatorHeavyTaskCount,
+            taskTypeAssignments,
+            operatorSkillsUsed
+          },
+          rules,
+          tasks
+        );
+
+        // Evaluate soft rules
+        const brokenRules = evaluateSoftRules(
+          operator,
+          task,
+          dayIndex,
+          {
+            operatorTaskHistory,
+            operatorTaskCount,
+            operatorSkillsUsed
+          },
+          settings.softRules,
+          tasks
+        );
+
+        return {
+          task,
+          score: score.score,
+          brokenRules
+        };
+      });
+
+      // Filter out tasks with score 0 (hard constraints violated)
+      const validTasks = scoredTasks.filter(st => st.score > 0);
+
+      if (validTasks.length === 0) {
+        unfillableGaps.push({
+          day,
+          operatorId: operator.id,
+          operatorName: operator.name,
+          reason: 'No eligible tasks (all violate hard constraints)'
+        });
+        continue;
+      }
+
+      // Select highest-scoring task
+      const bestMatch = validTasks.sort((a, b) => b.score - a.score)[0];
+
+      // Add to assignments
+      assignments.push({
+        day,
+        dayIndex,
+        operatorId: operator.id,
+        operatorName: operator.name,
+        taskId: bestMatch.task.id,
+        taskName: bestMatch.task.name,
+        taskColor: bestMatch.task.color,
+        brokenRules: bestMatch.brokenRules,
+        followedAllRules: bestMatch.brokenRules.length === 0
+      });
+
+      // Update tracking for next iterations
+      if (!operatorTaskHistory[operator.id]) operatorTaskHistory[operator.id] = [];
+      operatorTaskHistory[operator.id].push(bestMatch.task.id);
+      operatorTaskCount[operator.id] = (operatorTaskCount[operator.id] || 0) + 1;
+
+      if (HEAVY_TASKS.includes(bestMatch.task.name)) {
+        operatorHeavyTaskCount[operator.id] = (operatorHeavyTaskCount[operator.id] || 0) + 1;
+      }
+
+      const skill = bestMatch.task.requiredSkill;
+      if (!operatorSkillsUsed[operator.id]) operatorSkillsUsed[operator.id] = {};
+      operatorSkillsUsed[operator.id][skill] = (operatorSkillsUsed[operator.id][skill] || 0) + 1;
+    }
+  }
+
+  // Calculate stats
+  const totalEmptyCells = assignments.length + unfillableGaps.length;
+  const filledCells = assignments.length;
+  const unfilledCells = unfillableGaps.length;
+  const followedAllRules = assignments.filter(a => a.followedAllRules).length;
+  const requiredRelaxing = assignments.length - followedAllRules;
+
+  const byDay: Record<WeekDay, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0 };
+  assignments.forEach(a => {
+    byDay[a.day] = (byDay[a.day] || 0) + 1;
+  });
+
   return {
-    assignments: [],
-    unfillableGaps: [],
+    assignments,
+    unfillableGaps,
     stats: {
-      totalEmptyCells: 0,
-      filledCells: 0,
-      unfilledCells: 0,
-      followedAllRules: 0,
-      requiredRelaxing: 0,
-      byDay: { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0 }
+      totalEmptyCells,
+      filledCells,
+      unfilledCells,
+      followedAllRules,
+      requiredRelaxing,
+      byDay
     }
   };
 }
@@ -1470,4 +1656,94 @@ function calculateAssignmentScoreV2(
   }
 
   return { operatorId: operator.id, taskId: task.id, score, reasons };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FILL GAPS: SOFT RULE EVALUATION
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Evaluates soft rules for a potential assignment during Fill Gaps.
+ * Returns an array of soft rule IDs that would be broken by this assignment.
+ *
+ * @param operator - The operator being considered
+ * @param task - The task being considered
+ * @param dayIndex - The day index (0-4 for Mon-Fri)
+ * @param tracking - Current state tracking structures
+ * @param softRules - Array of soft rules to evaluate
+ * @param tasks - All available tasks (for looking up task properties)
+ * @returns Array of soft rule IDs that would be broken
+ */
+function evaluateSoftRules(
+  operator: Operator,
+  task: TaskType,
+  dayIndex: number,
+  tracking: {
+    operatorTaskHistory: Record<string, string[]>;
+    operatorTaskCount: Record<string, number>;
+    operatorSkillsUsed: Record<string, Record<string, number>>;
+  },
+  softRules: SoftRule[],
+  tasks: TaskType[]
+): SoftRuleType[] {
+  const brokenRules: SoftRuleType[] = [];
+  const taskHistory = tracking.operatorTaskHistory[operator.id] || [];
+
+  // Only evaluate enabled soft rules
+  for (const rule of softRules.filter(r => r.enabled)) {
+    switch (rule.id) {
+      case 'avoid-consecutive-same-task': {
+        // Check if yesterday's task (if exists) was the same as this task
+        if (dayIndex > 0 && taskHistory.length >= dayIndex) {
+          const yesterdayTaskId = taskHistory[dayIndex - 1];
+          if (yesterdayTaskId === task.id) {
+            brokenRules.push('avoid-consecutive-same-task');
+          }
+        }
+        break;
+      }
+
+      case 'task-variety': {
+        // Check if operator has good task variety (at least 2 different tasks in history)
+        const uniqueTasks = new Set(taskHistory);
+        // If this would be their 3rd+ assignment but they've only done 1 task so far, flag it
+        if (taskHistory.length >= 2 && uniqueTasks.size < 2 && !uniqueTasks.has(task.id)) {
+          // Actually this is GOOD variety, don't flag
+        } else if (taskHistory.length >= 2 && uniqueTasks.size < 2 && uniqueTasks.has(task.id)) {
+          // Same task again with no variety - flag it
+          brokenRules.push('task-variety');
+        }
+        break;
+      }
+
+      case 'workload-balance': {
+        // Check if operator is overloaded compared to average
+        const allOperatorCounts = Object.values(tracking.operatorTaskCount);
+        const avgWorkload = allOperatorCounts.length > 0
+          ? allOperatorCounts.reduce((a, b) => a + b, 0) / allOperatorCounts.length
+          : 0;
+        const operatorLoad = tracking.operatorTaskCount[operator.id] || 0;
+
+        // If this operator already has 20% more than average, flag it
+        if (operatorLoad > avgWorkload * 1.2) {
+          brokenRules.push('workload-balance');
+        }
+        break;
+      }
+
+      case 'avoid-consecutive-heavy': {
+        // Check if both yesterday's task and today's task are heavy
+        if (dayIndex > 0 && taskHistory.length >= dayIndex && task.isHeavy) {
+          const yesterdayTaskId = taskHistory[dayIndex - 1];
+          const yesterdayTask = tasks.find(t => t.id === yesterdayTaskId);
+          if (yesterdayTask?.isHeavy) {
+            brokenRules.push('avoid-consecutive-heavy');
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  return brokenRules;
 }
