@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { DndContext, DragEndEvent, DragStartEvent, useSensor, useSensors, PointerSensor, TouchSensor, DragOverlay } from '@dnd-kit/core';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
 import {
@@ -23,7 +24,7 @@ import {
   isTCTask, getTCFixedColor,
   type WeeklyExclusions, type ExclusionReason, isOperatorExcludedForDay, getOperatorExclusion, EXCLUSION_REASONS,
   type SoftRule, type SoftRuleType, SOFT_RULE_METADATA, DEFAULT_SOFT_RULES, type FillGapsSettings, DEFAULT_FILL_GAPS_SETTINGS,
-  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement, type ScheduleConflict, type ConflictResolution
+  type PlanningTemplate, FillGapsResult, OperatorTypeRequirement
 } from './types';
 import { getCurrentUser, getCachedUser, signOut, onAuthStateChange, updatePassword, updateProfile, type CloudUser } from './services/supabase/authService';
 import { hybridStorage } from './services/storage';
@@ -32,7 +33,7 @@ import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
 import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
-import ConflictResolutionWizard from './components/ConflictResolutionWizard';
+import { DraggableCell, DroppableCell } from './components/DraggableCell';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
@@ -42,7 +43,7 @@ import InviteAcceptPage from './components/InviteAcceptPage';
 import ToastSystem, { useToasts} from './components/ToastSystem';
 import { Tooltip } from './components/Tooltip';
 import WeeklyAssignButton from './components/WeeklyAssignButton';
-import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule, generateResolutions } from './services/schedulingService';
+import { generateSmartSchedule, generateOptimizedSchedule, validateSchedule, ScheduleWarning, DEFAULT_RULES, SchedulingRules, validatePlanBuilderRequirements, fillGapsSchedule } from './services/schedulingService';
 import { createEmptyWeek, getWeekRangeString, getWeekLabel, isCurrentWeek, getAdjacentWeek } from './services/weekUtils';
 import {
   ActivityLogEntry,
@@ -297,11 +298,6 @@ function App() {
   const [weeklyPlanningConfigs, setWeeklyPlanningConfigs] = useState<Record<string, WeeklyPlanningConfig>>({});
   const [weeklyExclusions, setWeeklyExclusions] = useState<Record<string, WeeklyExclusions>>({});
   const [planningTemplates, setPlanningTemplates] = useState<PlanningTemplate[]>([]);
-
-  // Conflict Resolution Wizard State
-  const [showConflictWizard, setShowConflictWizard] = useState(false);
-  const [scheduleConflicts, setScheduleConflicts] = useState<ScheduleConflict[]>([]);
-  const [conflictResolutions, setConflictResolutions] = useState<ConflictResolution[]>([]);
 
   // Feedback Modal State
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -620,6 +616,21 @@ function App() {
   const [fillGapsResult, setFillGapsResult] = useState<FillGapsResult | null>(null);
   const [selectedCell, setSelectedCell] = useState<{opId: string, dayIndex: number} | null>(null);
   const [dragInfo, setDragInfo] = useState<{opId: string; dayIndex: number; taskId: string | null} | null>(null);
+
+  // DnD Kit sensors for touch and mouse support
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // 8px movement required before drag starts
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 200, // 200ms hold before drag starts on touch
+        tolerance: 5,
+      },
+    })
+  );
 
   // Multi-cell selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // format: "opId-dayIndex"
@@ -1116,6 +1127,37 @@ function App() {
     // Don't show staffing warnings during manual editing - only show hard warnings
     const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
+  };
+
+  // DnD Kit: Handle drag start
+  const handleDndDragStart = (event: DragStartEvent) => {
+    const { active } = event;
+    const dragData = active.data.current;
+
+    if (dragData && !currentWeek.locked) {
+      setDragInfo({
+        opId: dragData.opId,
+        dayIndex: dragData.dayIndex,
+        taskId: dragData.taskId
+      });
+    }
+  };
+
+  // DnD Kit: Handle drag end
+  const handleDndDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || !dragInfo) {
+      setDragInfo(null);
+      return;
+    }
+
+    const dropData = over.data.current;
+    if (dropData) {
+      handleDragDrop(dropData.opId, dropData.dayIndex);
+    }
+
+    setDragInfo(null);
   };
 
   // --- Multi-Cell Selection Handlers ---
@@ -2115,119 +2157,6 @@ function App() {
         `${appliedCount} gap${appliedCount > 1 ? 's' : ''} filled in the schedule`
       );
     }
-  };
-
-  // Detect conflicts and open the Conflict Resolution Wizard
-  const handleDetectConflicts = () => {
-    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-    const assignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-    currentWeek.days.forEach((d, idx) => {
-      assignmentsMap[idx] = d.assignments;
-    });
-
-    // Get schedule warnings
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
-
-    // Convert warnings to conflicts
-    const conflicts: ScheduleConflict[] = warnings.map((warning, index) => ({
-      id: `conflict-${index}-${Date.now()}`,
-      type: warning.type === 'skill_mismatch' ? 'skill-mismatch' :
-            warning.type === 'availability_conflict' ? 'availability' :
-            warning.type === 'double_assignment' ? 'double-assignment' :
-            warning.type === 'understaffed' ? 'understaffed' : 'skill-mismatch',
-      severity: (warning.type === 'skill_mismatch' || warning.type === 'availability_conflict' || warning.type === 'double_assignment') ? 'critical' : 'warning',
-      day: warning.day || 'Mon',
-      operatorId: warning.operatorId,
-      operatorName: warning.operatorId ? operators.find(o => o.id === warning.operatorId)?.name : undefined,
-      taskId: warning.taskId,
-      taskName: warning.taskId ? tasks.find(t => t.id === warning.taskId)?.name : undefined,
-      message: warning.message,
-    }));
-
-    if (conflicts.length === 0) {
-      toast.success('No Conflicts Found', 'Your schedule has no conflicts!');
-      return;
-    }
-
-    // Generate resolution proposals
-    const resolutions = generateResolutions(warnings, assignmentsMap, operators, tasks, daysList);
-
-    setScheduleConflicts(conflicts);
-    setConflictResolutions(resolutions);
-    setShowConflictWizard(true);
-  };
-
-  // Apply a selected resolution
-  const handleApplyResolution = (resolution: ConflictResolution) => {
-    const updatedDays = [...currentWeek.days];
-
-    resolution.actions.forEach(action => {
-      const dayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(action.day);
-      if (dayIndex === -1) return;
-
-      const dayAssignments = { ...updatedDays[dayIndex].assignments };
-
-      switch (action.type) {
-        case 'swap': {
-          if (!action.operator1Id || !action.operator2Id) break;
-
-          const op1Assignment = dayAssignments[action.operator1Id];
-          const op2Assignment = dayAssignments[action.operator2Id];
-
-          // Swap the task assignments
-          dayAssignments[action.operator1Id] = {
-            ...op1Assignment,
-            taskId: action.task2Id
-          };
-          dayAssignments[action.operator2Id] = {
-            ...op2Assignment,
-            taskId: action.task1Id
-          };
-          break;
-        }
-
-        case 'assign': {
-          if (!action.operatorId || !action.taskId) break;
-          dayAssignments[action.operatorId] = {
-            taskId: action.taskId,
-            locked: false
-          };
-          break;
-        }
-
-        case 'unassign': {
-          if (!action.operatorId) break;
-          dayAssignments[action.operatorId] = {
-            taskId: null,
-            locked: false
-          };
-          break;
-        }
-
-        case 'ignore':
-          // Do nothing - just acknowledge the conflict
-          break;
-      }
-
-      updatedDays[dayIndex] = {
-        ...updatedDays[dayIndex],
-        assignments: dayAssignments
-      };
-    });
-
-    const newSchedule = { ...currentWeek, days: updatedDays };
-    updateWeek(newSchedule);
-
-    // Re-validate after applying resolution
-    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-    const assignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-    newSchedule.days.forEach((d, idx) => {
-      assignmentsMap[idx] = d.assignments;
-    });
-    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), true);
-    setScheduleWarnings(warnings);
-
-    toast.success('Resolution Applied', 'Conflict resolution has been applied to the schedule');
   };
 
   // Handle applying the planning modal configuration and running smart fill
@@ -6889,7 +6818,7 @@ function App() {
 
         {/* Warnings Card - Dynamic severity-based styling */}
         <button
-          onClick={handleDetectConflicts}
+          onClick={() => setShowWarningsModal(true)}
           className={`p-4 rounded-xl shadow-lg flex items-center gap-4 text-left transition-all hover:scale-[1.02] ${
             hasCriticalWarnings
               ? (theme === 'Midnight'
@@ -7235,6 +7164,11 @@ function App() {
             Scroll →
           </div>
 
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDndDragStart}
+            onDragEnd={handleDndDragEnd}
+          >
           <table className={`w-full border-collapse ${isCompactView ? 'min-w-0' : 'min-w-[1000px]'}`}>
             <thead className={`sticky top-0 z-30 backdrop-blur-sm ${styles.gridHeader}`}>
               <tr>
@@ -8062,6 +7996,7 @@ function App() {
               ))}
             </tbody>
           </table>
+          </DndContext>
         </div>
       </div>
 
@@ -9510,18 +9445,6 @@ function App() {
         onSubmit={handleSubmitFeedback}
         currentPage={activeTab}
         isDark={theme === 'Midnight'}
-      />
-
-      {/* Conflict Resolution Wizard */}
-      <ConflictResolutionWizard
-        isOpen={showConflictWizard}
-        onClose={() => setShowConflictWizard(false)}
-        conflicts={scheduleConflicts}
-        resolutions={conflictResolutions}
-        operators={operators}
-        tasks={tasks}
-        onApplyResolution={handleApplyResolution}
-        theme={theme}
       />
 
       {/* Clear Data Confirmation Modal */}
