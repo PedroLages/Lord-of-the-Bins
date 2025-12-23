@@ -9,6 +9,7 @@ interface DraggableCellProps {
   className?: string;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  data?: any; // Data to pass to drag handler
 }
 
 /**
@@ -22,6 +23,7 @@ export const DraggableCell: React.FC<DraggableCellProps> = ({
   className = '',
   onDragStart,
   onDragEnd,
+  data,
 }) => {
   const {
     attributes,
@@ -32,6 +34,7 @@ export const DraggableCell: React.FC<DraggableCellProps> = ({
   } = useDraggable({
     id,
     disabled,
+    data,
   });
 
   const style = transform
@@ -67,6 +70,7 @@ interface DroppableCellProps {
   children: React.ReactNode;
   disabled?: boolean;
   className?: string;
+  data?: any; // Data to pass to drop handler
 }
 
 /**
@@ -78,10 +82,12 @@ export const DroppableCell: React.FC<DroppableCellProps> = ({
   children,
   disabled = false,
   className = '',
+  data,
 }) => {
   const { setNodeRef, isOver } = useDroppable({
     id,
     disabled,
+    data,
   });
 
   return (

@@ -7268,17 +7268,12 @@ function App() {
                               ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50')
                               : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7377,17 +7372,12 @@ function App() {
                           </div>
                         ) : (
                           // Task Pill
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!taskId || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!taskId && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!taskId || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => handleCellHover(op.id, dayIdx, e, false)}
@@ -7435,6 +7425,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {/* Warning Indicator */}
                         {hasWarning && !isSelected && (
@@ -7479,6 +7470,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
@@ -7635,17 +7627,12 @@ function App() {
                         } ${
                           !isExcluded && flexHasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7704,17 +7691,12 @@ function App() {
                              </div>
                           </div>
                         ) : (
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!task || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!task && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!task || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
@@ -7753,6 +7735,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {/* Warning Indicator for Flex */}
                         {flexHasWarning && !isSelected && (
@@ -7776,6 +7759,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
@@ -7861,17 +7845,12 @@ function App() {
                         } ${
                           !isExcluded && isDropTarget ? (theme === 'Midnight' ? 'bg-emerald-900/20' : 'bg-emerald-50') : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7930,17 +7909,12 @@ function App() {
                              </div>
                           </div>
                         ) : (
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!task || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!task && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!task || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
@@ -7979,6 +7953,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {isSelected && (
                           <div
@@ -7989,6 +7964,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
