@@ -1,4 +1,4 @@
-import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement, PlanBuilderViolation, FillGapsResult, FillGapsSettings } from '../types';
+import { Operator, TaskType, WeekDay, ScheduleAssignment, getRequiredOperatorsForDay, TaskRequirement, getRequirementsForDay, getTotalFromRequirements, OperatorTypeRequirement, PlanBuilderViolation, FillGapsResult, FillGapsSettings, FillGapsAssignment, UnfillableGap, SoftRule, SoftRuleType } from '../types';
 import { generateMaxMatchingSchedule } from './scheduling/maxMatchingScheduler';
 
 // Algorithm type for scheduling
