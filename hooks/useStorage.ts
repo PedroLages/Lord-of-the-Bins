@@ -195,7 +195,10 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
   // Save methods
   const saveOperators = useCallback(async (operators: Operator[]) => {
     try {
+      // Save all operators to local storage
       await storage.saveAllOperators(operators);
+      // Note: Individual operator changes use hybridStorage.saveOperator() for cloud sync
+      console.log('[Operators] Saved', operators.length, 'operators to local storage');
     } catch (err) {
       console.error('Failed to save operators:', err);
     }
@@ -203,7 +206,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveOperator = useCallback(async (operator: Operator) => {
     try {
-      await storage.saveOperator(operator);
+      // Use hybridStorage to sync operator changes to Supabase
+      await hybridStorage.saveOperator(operator);
+      console.log('[Operator] Saved to cloud:', operator.name, 'with', operator.skills.length, 'skills');
     } catch (err) {
       console.error('Failed to save operator:', err);
     }
@@ -241,7 +246,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
         schedulingRules: rules,
         skills,
       };
-      await storage.saveSettings(settings);
+      // Use hybridStorage to sync settings to Supabase
+      await hybridStorage.saveSettings(settings);
+      console.log('[Settings] Saved to cloud:', { theme, heavyTasks: rules.heavyTasks?.length, softTasks: rules.softTasks?.length });
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
@@ -249,7 +256,7 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveSkills = useCallback(async (skills: string[]) => {
     try {
-      const currentSettings = await storage.getSettings();
+      const currentSettings = await hybridStorage.getSettings();
       const settings: AppSettings = {
         id: 'app_settings',
         theme: currentSettings?.theme || 'Modern',
@@ -257,7 +264,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
         skills,
         appearance: currentSettings?.appearance,
       };
-      await storage.saveSettings(settings);
+      // Use hybridStorage to sync skills to Supabase
+      await hybridStorage.saveSettings(settings);
+      console.log('[Skills] Saved to cloud:', skills.length, 'skills');
     } catch (err) {
       console.error('Failed to save skills:', err);
     }
@@ -265,7 +274,7 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveAppearance = useCallback(async (appearance: AppearanceSettings) => {
     try {
-      const currentSettings = await storage.getSettings();
+      const currentSettings = await hybridStorage.getSettings();
       const settings: AppSettings = {
         id: 'app_settings',
         theme: currentSettings?.theme || 'Modern',
@@ -274,7 +283,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
         appearance,
         fillGapsSettings: currentSettings?.fillGapsSettings,
       };
-      await storage.saveSettings(settings);
+      // Use hybridStorage to sync appearance to Supabase
+      await hybridStorage.saveSettings(settings);
+      console.log('[Appearance] Saved to cloud');
     } catch (err) {
       console.error('Failed to save appearance:', err);
     }
@@ -282,7 +293,7 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveFillGapsSettings = useCallback(async (fillGapsSettings: FillGapsSettings) => {
     try {
-      const currentSettings = await storage.getSettings();
+      const currentSettings = await hybridStorage.getSettings();
       const settings: AppSettings = {
         id: 'app_settings',
         theme: currentSettings?.theme || 'Modern',
@@ -291,7 +302,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
         appearance: currentSettings?.appearance,
         fillGapsSettings,
       };
-      await storage.saveSettings(settings);
+      // Use hybridStorage to sync Fill Gaps settings to Supabase
+      await hybridStorage.saveSettings(settings);
+      console.log('[Fill Gaps Settings] Saved to cloud');
     } catch (err) {
       console.error('Failed to save fill gaps settings:', err);
     }
@@ -299,7 +312,8 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveTaskRequirement = useCallback(async (requirement: TaskRequirement) => {
     try {
-      await storage.saveTaskRequirement(requirement);
+      // Use hybridStorage to sync task requirements to Supabase
+      await hybridStorage.saveTaskRequirement(requirement);
     } catch (err) {
       console.error('Failed to save task requirement:', err);
     }
