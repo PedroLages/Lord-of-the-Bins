@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { DndContext, DragEndEvent, DragStartEvent, useSensor, useSensors, PointerSensor, TouchSensor, DragOverlay } from '@dnd-kit/core';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
 import {
@@ -13,7 +14,7 @@ import {
   Check, Layers, GitBranch, Cpu, Send, List, Table2, Grid3X3, Loader2, Database, X,
   Maximize, Minimize, Minimize2, CalendarPlus, Camera, User, KeyRound,
   Palmtree, Thermometer, GraduationCap, CircleDashed,
-  CalendarX2, Shuffle, Scale, GripVertical, Command,
+  CalendarX2, Shuffle, Scale, GripVertical, Command, CalendarClock,
   UserX, UserPlus, UserMinus, PartyPopper, Repeat, MousePointerClick, Info
 } from 'lucide-react';
 import {
@@ -32,6 +33,7 @@ import ExportModal from './components/ExportModal';
 import PlanningModal from './components/PlanningModal';
 import FeedbackModal from './components/FeedbackModal';
 import CommandPalette from './components/CommandPalette';
+import { DraggableCell, DroppableCell } from './components/DraggableCell';
 import TaskRequirementsSettings from './components/TaskRequirementsSettings';
 import ProfileSettings from './components/ProfileSettings';
 import ShiftManagementSettings from './components/ShiftManagementSettings';
@@ -615,6 +617,21 @@ function App() {
   const [selectedCell, setSelectedCell] = useState<{opId: string, dayIndex: number} | null>(null);
   const [dragInfo, setDragInfo] = useState<{opId: string; dayIndex: number; taskId: string | null} | null>(null);
 
+  // DnD Kit sensors for touch and mouse support
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // 8px movement required before drag starts
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 200, // 200ms hold before drag starts on touch
+        tolerance: 5,
+      },
+    })
+  );
+
   // Multi-cell selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // format: "opId-dayIndex"
   const [selectionAnchor, setSelectionAnchor] = useState<{opId: string, dayIndex: number} | null>(null);
@@ -785,12 +802,19 @@ function App() {
 
       setOperators(prev => prev.map(o => o.id === op.id ? op : o));
 
+      // Immediately sync individual operator changes to cloud
+      saveOperator(op).catch(err => console.error('Failed to sync operator to cloud:', err));
+
       if (changes.length > 0) {
         const entry = logOperatorUpdated(op.name, changes.join(', '));
         setActivityLog(prev => [entry, ...prev]);
       }
     } else {
       setOperators(prev => [...prev, op]);
+
+      // Sync new operator to cloud
+      saveOperator(op).catch(err => console.error('Failed to sync new operator to cloud:', err));
+
       const entry = logOperatorAdded(op.name);
       setActivityLog(prev => [entry, ...prev]);
     }
@@ -1103,6 +1127,37 @@ function App() {
     // Don't show staffing warnings during manual editing - only show hard warnings
     const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
     setScheduleWarnings(warnings);
+  };
+
+  // DnD Kit: Handle drag start
+  const handleDndDragStart = (event: DragStartEvent) => {
+    const { active } = event;
+    const dragData = active.data.current;
+
+    if (dragData && !currentWeek.locked) {
+      setDragInfo({
+        opId: dragData.opId,
+        dayIndex: dragData.dayIndex,
+        taskId: dragData.taskId
+      });
+    }
+  };
+
+  // DnD Kit: Handle drag end
+  const handleDndDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || !dragInfo) {
+      setDragInfo(null);
+      return;
+    }
+
+    const dropData = over.data.current;
+    if (dropData) {
+      handleDragDrop(dropData.opId, dropData.dayIndex);
+    }
+
+    setDragInfo(null);
   };
 
   // --- Multi-Cell Selection Handlers ---
@@ -2000,32 +2055,53 @@ function App() {
 
     // Run the fill gaps algorithm to generate preview
     // Only consider tasks that have Task Requirements configured (Task Staffing settings)
-    const configuredTasks = tasks.filter(t => taskRequirements.some(r => r.taskId === t.id));
+    // AND exclude Heavy tasks (manually planned by TCs)
+    const configuredTasks = tasks.filter(t => {
+      // Must have task requirements configured
+      if (!taskRequirements.some(r => r.taskId === t.id)) return false;
+
+      // Exclude Heavy tasks - these are manually planned by TCs
+      const isHeavyTask = schedulingRules.heavyTasks?.includes(t.name);
+      if (isHeavyTask) return false;
+
+      return true;
+    });
 
     // Log which tasks are being considered
-    console.log('[Fill Gaps] Using only configured tasks:', configuredTasks.map(t => t.name));
+    console.log('[Fill Gaps] Using soft/easy tasks only:', configuredTasks.map(t => t.name));
     console.log('[Fill Gaps] Skipping tasks without requirements:',
       tasks.filter(t => !taskRequirements.some(r => r.taskId === t.id)).map(t => t.name)
     );
+    console.log('[Fill Gaps] Excluding Heavy tasks (TC-planned):',
+      tasks.filter(t => schedulingRules.heavyTasks?.includes(t.name)).map(t => t.name)
+    );
 
     if (configuredTasks.length === 0) {
-      toast.warning(
-        'No Task Requirements',
-        'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
-        { duration: 6000 }
-      );
+      // Check if it's because all tasks are Heavy or no requirements configured
+      const hasHeavyTasks = tasks.some(t => schedulingRules.heavyTasks?.includes(t.name));
+      const hasRequirements = tasks.some(t => taskRequirements.some(r => r.taskId === t.id));
+
+      if (hasRequirements && hasHeavyTasks) {
+        toast.warning(
+          'No Soft Tasks Available',
+          'All configured tasks are marked as Heavy (TC-planned). Fill Gaps only assigns soft/easy tasks. Remove some tasks from Heavy category or add soft task requirements.',
+          { duration: 6000 }
+        );
+      } else {
+        toast.warning(
+          'No Task Requirements',
+          'Configure Task Staffing requirements in Settings → Configuration to use Fill Gaps.',
+          { duration: 6000 }
+        );
+      }
       return;
     }
 
     // Transform currentWeek to assignments map
+    // Format: Record<dayIndex, Record<operatorId, ScheduleAssignment>>
     const currentAssignmentsMap: Record<string, Record<string, ScheduleAssignment>> = {};
-    currentWeek.days.forEach((day) => {
-      Object.entries(day.assignments).forEach(([opId, assignment]: [string, ScheduleAssignment]) => {
-        if (!currentAssignmentsMap[opId]) {
-          currentAssignmentsMap[opId] = {};
-        }
-        currentAssignmentsMap[opId][day.dayOfWeek] = assignment;
-      });
+    currentWeek.days.forEach((day, dayIndex) => {
+      currentAssignmentsMap[dayIndex] = day.assignments;
     });
 
     const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -2064,6 +2140,15 @@ function App() {
     setCurrentWeek(newSchedule);
     setShowFillGapsPreview(false);
     setFillGapsResult(null);
+
+    // Re-validate the schedule after applying Fill Gaps
+    const daysList: WeekDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const assignmentsMap: Record<string, Record<string, { taskId: string | null; locked: boolean }>> = {};
+    newSchedule.days.forEach((d, idx) => {
+      assignmentsMap[idx] = d.assignments;
+    });
+    const warnings = validateSchedule(assignmentsMap, operators, tasks, daysList, getValidationRequirements(), false);
+    setScheduleWarnings(warnings);
 
     // Show toast notification
     if (appliedCount > 0) {
@@ -6998,31 +7083,28 @@ function App() {
            </div>
 
            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              {/* Plan Requirements Button */}
+              {/* Plan the Week Button */}
               <button
                 onClick={() => setShowPlanningModal(true)}
-                disabled={currentWeek.locked}
-                className={`group relative flex items-center justify-center gap-2 px-4 py-2.5 transition-all overflow-hidden flex-1 sm:flex-initial ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={currentWeek.locked ? 'Unlock schedule to plan' : 'Configure staffing requirements before Smart Fill'}
+                className={`group relative flex items-center justify-center gap-2 px-4 py-2.5 transition-all shadow-md hover:shadow-lg overflow-hidden flex-1 sm:flex-initial ${styles.primaryBtn}`}
               >
-                <Layers className="h-4 w-4 opacity-90" />
+                <CalendarClock className="h-4 w-4 opacity-90" />
                 <span className="font-medium text-sm whitespace-nowrap">Plan the Week</span>
               </button>
 
-              {/* Smart Fill Button */}
-              <button
-                onClick={handleAutoSchedule}
-                disabled={isGenerating || currentWeek.locked}
-                className={`group relative flex items-center justify-center gap-2 px-5 py-2.5 transition-all shadow-md hover:shadow-lg disabled:shadow-none overflow-hidden flex-1 sm:flex-initial ${styles.primaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={currentWeek.locked ? 'Unlock schedule to edit' : 'Auto-fill schedule'}
+              {/* Fill Gaps Button - Icon only with tooltip */}
+              <Tooltip
+                content={currentWeek.locked ? 'Unlock schedule to fill gaps' : 'Fill the Gaps'}
+                position="bottom"
               >
-                {isGenerating ? (
-                  <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4 opacity-90" />
-                )}
-                <span className="font-medium text-sm whitespace-nowrap">Smart Fill</span>
-              </button>
+                <button
+                  onClick={handleFillGaps}
+                  disabled={currentWeek.locked}
+                  className={`p-2.5 transition-colors ${styles.secondaryBtn} disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <Zap className="h-5 w-5" />
+                </button>
+              </Tooltip>
 
               <Tooltip content={currentWeek.locked ? 'Unlock schedule to clear' : 'Clear all assignments'} position="bottom">
                 <button
@@ -7082,6 +7164,11 @@ function App() {
             Scroll →
           </div>
 
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDndDragStart}
+            onDragEnd={handleDndDragEnd}
+          >
           <table className={`w-full border-collapse ${isCompactView ? 'min-w-0' : 'min-w-[1000px]'}`}>
             <thead className={`sticky top-0 z-30 backdrop-blur-sm ${styles.gridHeader}`}>
               <tr>
@@ -7181,17 +7268,12 @@ function App() {
                               ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50')
                               : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7290,17 +7372,12 @@ function App() {
                           </div>
                         ) : (
                           // Task Pill
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!taskId || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!taskId && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!taskId || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => handleCellHover(op.id, dayIdx, e, false)}
@@ -7348,6 +7425,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {/* Warning Indicator */}
                         {hasWarning && !isSelected && (
@@ -7392,6 +7470,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
@@ -7548,17 +7627,12 @@ function App() {
                         } ${
                           !isExcluded && flexHasWarning ? (theme === 'Midnight' ? 'bg-amber-900/10' : 'bg-amber-50/50') : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7617,17 +7691,12 @@ function App() {
                              </div>
                           </div>
                         ) : (
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!task || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!task && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!task || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
@@ -7666,6 +7735,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {/* Warning Indicator for Flex */}
                         {flexHasWarning && !isSelected && (
@@ -7689,6 +7759,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
@@ -7774,17 +7845,12 @@ function App() {
                         } ${
                           !isExcluded && isDropTarget ? (theme === 'Midnight' ? 'bg-emerald-900/20' : 'bg-emerald-50') : ''
                         }`}
-                        onDragOver={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(e) => {
-                          if (isExcluded) return;
-                          e.preventDefault();
-                          handleDragDrop(op.id, dayIdx);
-                        }}
                       >
+                        <DroppableCell
+                          id={`drop-${op.id}-${dayIdx}`}
+                          disabled={isExcluded || currentWeek.locked}
+                          data={{ opId: op.id, dayIndex: dayIdx }}
+                        >
                         {/* Excluded/Leave Cell */}
                         {isExcluded ? (
                           <Tooltip
@@ -7843,17 +7909,12 @@ function App() {
                              </div>
                           </div>
                         ) : (
+                          <DraggableCell
+                            id={`drag-${op.id}-${dayIdx}`}
+                            disabled={!task || currentWeek.locked}
+                            data={{ opId: op.id, dayIndex: dayIdx, taskId }}
+                          >
                           <button
-                            draggable={!!task && !currentWeek.locked}
-                            onDragStart={(e) => {
-                              if (!task || currentWeek.locked) {
-                                e.preventDefault();
-                                return;
-                              }
-                              setDragInfo({ opId: op.id, dayIndex: dayIdx, taskId });
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setDragInfo(null)}
                             onClick={(e) => !currentWeek.locked && handleCellClick(op.id, dayIdx, e)}
                             onMouseEnter={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, true)}
                             onMouseLeave={(e) => !currentWeek.locked && handleCellHover(op.id, dayIdx, e, false)}
@@ -7892,6 +7953,7 @@ function App() {
                               </div>
                             )}
                           </button>
+                          </DraggableCell>
                         )}
                         {isSelected && (
                           <div
@@ -7902,6 +7964,7 @@ function App() {
                             }}
                           ></div>
                         )}
+                        </DroppableCell>
                       </td>
                     );
                   })}
@@ -7909,6 +7972,7 @@ function App() {
               ))}
             </tbody>
           </table>
+          </DndContext>
         </div>
       </div>
 
