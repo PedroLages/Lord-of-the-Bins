@@ -165,7 +165,6 @@ export default function UserManagementSettings({
     }
   };
 
-<<<<<<< HEAD
   const handleResetPassword = (userId: string, userName: string) => {
     setConfirmResetPasswordModal({ userId, userName });
   };
@@ -177,14 +176,6 @@ export default function UserManagementSettings({
     setConfirmResetPasswordModal(null);
     setActioningUserId(userId);
 
-=======
-  const handleResetPassword = async (userId: string, userName: string) => {
-    if (!confirm(`Reset password for ${userName}?\n\nA temporary password will be generated. You'll need to write it down and give it to them in person.`)) {
-      return;
-    }
-
-    setActioningUserId(userId);
->>>>>>> origin/main
     try {
       const { temporaryPassword, userCode } = await generateTemporaryPassword(userId);
 
@@ -678,7 +669,6 @@ export default function UserManagementSettings({
           </div>
         </div>
       )}
-<<<<<<< HEAD
 
       {/* Deactivate Confirmation Modal */}
       {confirmDeactivateModal && (
@@ -854,8 +844,6 @@ export default function UserManagementSettings({
           </div>
         </div>
       )}
-=======
->>>>>>> origin/main
     </div>
   );
 }
