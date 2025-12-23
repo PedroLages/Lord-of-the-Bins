@@ -957,7 +957,8 @@ export function fillGapsSchedule(
 
   // Pre-populate tracking with existing assignments
   operators.forEach(op => {
-    operatorTaskHistory[op.id] = [];
+    // Initialize task history as fixed-size array (one slot per day)
+    operatorTaskHistory[op.id] = new Array(days.length).fill(null);
     operatorTaskCount[op.id] = 0;
     operatorHeavyTaskCount[op.id] = 0;
     operatorSkillsUsed[op.id] = {};
@@ -969,9 +970,11 @@ export function fillGapsSchedule(
 
     Object.entries(dayAssignments).forEach(([opId, assignment]) => {
       if (assignment.taskId) {
-        // Track task history
-        if (!operatorTaskHistory[opId]) operatorTaskHistory[opId] = [];
-        operatorTaskHistory[opId].push(assignment.taskId);
+        // Track task history by day index
+        if (!operatorTaskHistory[opId]) {
+          operatorTaskHistory[opId] = new Array(days.length).fill(null);
+        }
+        operatorTaskHistory[opId][dayIndex] = assignment.taskId;
 
         // Track task count
         operatorTaskCount[opId] = (operatorTaskCount[opId] || 0) + 1;
@@ -1104,8 +1107,10 @@ export function fillGapsSchedule(
       });
 
       // Update tracking for next iterations
-      if (!operatorTaskHistory[operator.id]) operatorTaskHistory[operator.id] = [];
-      operatorTaskHistory[operator.id].push(bestMatch.task.id);
+      if (!operatorTaskHistory[operator.id]) {
+        operatorTaskHistory[operator.id] = new Array(days.length).fill(null);
+      }
+      operatorTaskHistory[operator.id][dayIndex] = bestMatch.task.id;
       operatorTaskCount[operator.id] = (operatorTaskCount[operator.id] || 0) + 1;
 
       if (HEAVY_TASKS.includes(bestMatch.task.name)) {
@@ -1694,9 +1699,9 @@ function evaluateSoftRules(
     switch (rule.id) {
       case 'avoid-consecutive-same-task': {
         // Check if yesterday's task (if exists) was the same as this task
-        if (dayIndex > 0 && taskHistory.length >= dayIndex) {
+        if (dayIndex > 0) {
           const yesterdayTaskId = taskHistory[dayIndex - 1];
-          if (yesterdayTaskId === task.id) {
+          if (yesterdayTaskId && yesterdayTaskId === task.id) {
             brokenRules.push('avoid-consecutive-same-task');
           }
         }
@@ -1705,12 +1710,12 @@ function evaluateSoftRules(
 
       case 'task-variety': {
         // Check if operator has good task variety (at least 2 different tasks in history)
-        const uniqueTasks = new Set(taskHistory);
-        // If this would be their 3rd+ assignment but they've only done 1 task so far, flag it
-        if (taskHistory.length >= 2 && uniqueTasks.size < 2 && !uniqueTasks.has(task.id)) {
-          // Actually this is GOOD variety, don't flag
-        } else if (taskHistory.length >= 2 && uniqueTasks.size < 2 && uniqueTasks.has(task.id)) {
-          // Same task again with no variety - flag it
+        // Filter out null values (unassigned days)
+        const assignedTasks = taskHistory.filter(t => t !== null);
+        const uniqueTasks = new Set(assignedTasks);
+
+        // If operator has 2+ assignments but only did 1 unique task, and is about to do the same task again
+        if (assignedTasks.length >= 2 && uniqueTasks.size === 1 && uniqueTasks.has(task.id)) {
           brokenRules.push('task-variety');
         }
         break;
