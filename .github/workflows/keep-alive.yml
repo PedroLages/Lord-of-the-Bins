@@ -15,10 +15,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
-          # Simple health check to Supabase
-          curl -X GET "${SUPABASE_URL}/rest/v1/" \
+          # Simple health check to Supabase auth endpoint
+          # This endpoint works with publishable keys (no secret key needed)
+          curl -X GET "${SUPABASE_URL}/auth/v1/health" \
             -H "apikey: ${SUPABASE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_KEY}" \
             --fail --silent --show-error
 
           echo "✅ Supabase pinged successfully at $(date)"
