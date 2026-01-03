@@ -10,7 +10,7 @@
 import { storage } from './index';
 import { supabaseStorage, SupabaseStorageService } from '../supabase/supabaseStorage';
 import { isSupabaseConfigured, getSupabaseClient } from '../supabase/client';
-import { queueSync, subscribeSyncState, getSyncState, SyncState } from '../sync/syncQueue';
+import { queueSync, subscribeSyncState, getSyncState, retrySyncQueue, SyncState } from '../sync/syncQueue';
 import type { Operator, TaskType, WeeklySchedule, TaskRequirement, PlanningTemplate } from '../../types';
 import type { SchedulingRules } from '../schedulingService';
 import type { AppSettings } from './database';
@@ -70,6 +70,12 @@ class HybridStorage implements HybridStorageService {
   setShiftId(shiftId: string) {
     this.shiftId = shiftId;
     this.cloudStorage.setShiftId(shiftId);
+
+    // Trigger sync queue processing after authentication
+    // This ensures pending items sync immediately when user logs in
+    if (shiftId && isSupabaseConfigured) {
+      setTimeout(() => retrySyncQueue(), 100);
+    }
   }
 
   isCloudEnabled(): boolean {
