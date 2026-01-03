@@ -241,7 +241,7 @@ class HybridStorage implements HybridStorageService {
     await storage.saveTaskRequirement(req);
 
     if (this.isCloudEnabled()) {
-      queueSync('task_requirements', 'update', req.taskId, {
+      queueSync('task_requirements', 'upsert', req.taskId, {
         local_id: req.taskId,
         shift_id: this.shiftId,
         task_id: req.taskId,
