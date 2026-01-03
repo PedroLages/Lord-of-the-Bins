@@ -226,8 +226,25 @@ class HybridStorage implements HybridStorageService {
   async saveSettings(settings: AppSettings): Promise<void> {
     await storage.saveSettings(settings);
 
-    // Settings sync is optional - local preferences don't need cloud sync
-    // unless multi-device sync is explicitly wanted
+    // Sync settings to cloud for multi-device support
+    if (this.isCloudEnabled() && settings.schedulingRules) {
+      queueSync('scheduling_rules', 'update', 'rules', {
+        shift_id: this.shiftId,
+        algorithm: settings.schedulingRules.algorithm,
+        strict_skill_matching: settings.schedulingRules.strictSkillMatching,
+        allow_consecutive_heavy_shifts: settings.schedulingRules.allowConsecutiveHeavyShifts,
+        prioritize_flex_for_exceptions: settings.schedulingRules.prioritizeFlexForExceptions,
+        respect_preferred_stations: settings.schedulingRules.respectPreferredStations,
+        max_consecutive_days_on_same_task: settings.schedulingRules.maxConsecutiveDaysOnSameTask,
+        fair_distribution: settings.schedulingRules.fairDistribution,
+        balance_workload: settings.schedulingRules.balanceWorkload,
+        auto_assign_coordinators: settings.schedulingRules.autoAssignCoordinators,
+        randomization_factor: settings.schedulingRules.randomizationFactor,
+        prioritize_skill_variety: settings.schedulingRules.prioritizeSkillVariety,
+        heavy_tasks: settings.schedulingRules.heavyTasks || [],
+        soft_tasks: settings.schedulingRules.softTasks || [],
+      });
+    }
   }
 
   async getSchedulingRules(): Promise<SchedulingRules | null> {
@@ -257,6 +274,8 @@ class HybridStorage implements HybridStorageService {
           auto_assign_coordinators: rules.autoAssignCoordinators,
           randomization_factor: rules.randomizationFactor,
           prioritize_skill_variety: rules.prioritizeSkillVariety,
+          heavy_tasks: rules.heavyTasks || [],
+          soft_tasks: rules.softTasks || [],
         });
       }
     }
