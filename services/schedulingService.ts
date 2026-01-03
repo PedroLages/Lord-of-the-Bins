@@ -34,6 +34,9 @@ export const DEFAULT_RULES: SchedulingRules = {
   randomizationFactor: 10, // Default medium randomization
   useV2Algorithm: false, // V2 disabled by default - enable in Settings to test
   prioritizeSkillVariety: true, // V2: Use all operator skills - enabled by default
+  algorithm: 'max-matching', // Default to V4 Max Matching algorithm
+  heavyTasks: [], // No tasks marked as heavy by default
+  softTasks: [], // No tasks marked as soft by default
 };
 
 // Heavy tasks that should be rotated
