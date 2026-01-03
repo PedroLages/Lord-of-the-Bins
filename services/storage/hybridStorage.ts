@@ -135,7 +135,7 @@ class HybridStorage implements HybridStorageService {
 
     // 2. Queue for cloud sync (non-blocking)
     if (this.isCloudEnabled()) {
-      queueSync('operators', 'update', operator.id, {
+      queueSync('operators', 'upsert', operator.id, {
         local_id: operator.id,
         shift_id: this.shiftId,
         name: operator.name,
@@ -171,7 +171,7 @@ class HybridStorage implements HybridStorageService {
     await storage.saveTask(task);
 
     if (this.isCloudEnabled()) {
-      queueSync('tasks', 'update', task.id, {
+      queueSync('tasks', 'upsert', task.id, {
         local_id: task.id,
         shift_id: this.shiftId,
         name: task.name,
@@ -209,7 +209,7 @@ class HybridStorage implements HybridStorageService {
     await storage.saveSchedule(schedule);
 
     if (this.isCloudEnabled()) {
-      queueSync('schedules', 'update', schedule.id, {
+      queueSync('schedules', 'upsert', schedule.id, {
         local_id: schedule.id,
         shift_id: this.shiftId,
         week_start_date: schedule.weekStartDate,
