@@ -35,6 +35,7 @@ In the Supabase Dashboard:
 3. Copy and paste contents of `migrations/001_create_schema.sql`
 4. Click **Run**
 5. Repeat for `migrations/002_create_rls_policies.sql`
+6. Repeat for `migrations/003_create_feedback_table.sql`
 
 Or use Supabase CLI:
 
@@ -58,7 +59,7 @@ SELECT table_name FROM information_schema.tables
 WHERE table_schema = 'public';
 ```
 
-You should see: `shifts`, `users`, `operators`, `tasks`, `task_requirements`, `schedules`, `scheduling_rules`, `activity_log`, `app_settings`
+You should see: `shifts`, `users`, `operators`, `tasks`, `task_requirements`, `schedules`, `scheduling_rules`, `activity_log`, `app_settings`, `feedback`
 
 ## Database Schema
 
@@ -75,6 +76,7 @@ You should see: `shifts`, `users`, `operators`, `tasks`, `task_requirements`, `s
 | `scheduling_rules` | Algorithm settings |
 | `activity_log` | Audit trail |
 | `app_settings` | Theme, preferences |
+| `feedback` | User feedback & bug reports |
 
 ### Row Level Security
 
