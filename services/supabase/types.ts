@@ -374,6 +374,47 @@ export interface Database {
           updated_at?: string;
         };
       };
+      planning_templates: {
+        Row: {
+          id: string;
+          local_id: string | null;
+          shift_id: string;
+          name: string;
+          description: string | null;
+          exclusions: Json;
+          rules: Json;
+          created_by: string | null;
+          sync_status: 'synced' | 'pending' | 'conflict';
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          local_id?: string | null;
+          shift_id: string;
+          name: string;
+          description?: string | null;
+          exclusions?: Json;
+          rules?: Json;
+          created_by?: string | null;
+          sync_status?: 'synced' | 'pending' | 'conflict';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          local_id?: string | null;
+          shift_id?: string;
+          name?: string;
+          description?: string | null;
+          exclusions?: Json;
+          rules?: Json;
+          created_by?: string | null;
+          sync_status?: 'synced' | 'pending' | 'conflict';
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
     };
     Views: {
       [_ in never]: never;
@@ -409,3 +450,4 @@ export type DbSchedule = Tables<'schedules'>;
 export type DbSchedulingRules = Tables<'scheduling_rules'>;
 export type DbActivityLog = Tables<'activity_log'>;
 export type DbAppSettings = Tables<'app_settings'>;
+export type DbPlanningTemplate = Tables<'planning_templates'>;
