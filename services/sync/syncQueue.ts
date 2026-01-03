@@ -34,7 +34,7 @@ function validateTableName(table: string): asserts table is AllowedTable {
 export interface SyncQueueItem {
   id?: number; // Auto-incremented by Dexie
   table: string;
-  operation: 'insert' | 'update' | 'delete';
+  operation: 'insert' | 'update' | 'delete' | 'upsert';
   localId: string;
   data: Record<string, unknown>;
   timestamp: number;
