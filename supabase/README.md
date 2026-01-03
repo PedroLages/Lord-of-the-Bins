@@ -36,6 +36,7 @@ In the Supabase Dashboard:
 4. Click **Run**
 5. Repeat for `migrations/002_create_rls_policies.sql`
 6. Repeat for `migrations/003_create_feedback_table.sql`
+7. Repeat for `migrations/004_add_heavy_soft_tasks_to_scheduling_rules.sql`
 
 Or use Supabase CLI:
 
