@@ -248,8 +248,13 @@ function App() {
       return refreshedSchedule || prev;
     });
 
+    // Reload planning templates from storage
+    getAllPlanningTemplates().then(templates => {
+      setPlanningTemplates(templates);
+    });
+
     toast.success('Settings synced from cloud');
-  }, [initialData, dataInitialized]);
+  }, [initialData, dataInitialized, getAllPlanningTemplates]);
 
   // Load planning templates when data is initialized
   useEffect(() => {
