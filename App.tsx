@@ -175,6 +175,9 @@ function App() {
   const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE_SETTINGS);
   const [fillGapsSettings, setFillGapsSettings] = useState<FillGapsSettings>(DEFAULT_FILL_GAPS_SETTINGS);
 
+  // Task requirements state
+  const [taskRequirements, setTaskRequirements] = useState<TaskRequirement[]>([]);
+
   // Week Navigation State - Initialize with current week dynamically
   const [currentWeek, setCurrentWeek] = useState<WeeklySchedule>(() => createEmptyWeek(new Date()));
   const [scheduleHistory, setScheduleHistory] = useState<Record<string, WeeklySchedule>>({});
@@ -458,8 +461,6 @@ function App() {
     return getPaletteById(appearance.activeThemeId, appearance.customThemes) || COLOR_PALETTES[0];
   }, [appearance.activeThemeId, appearance.customThemes]);
 
-  // Task requirements state
-  const [taskRequirements, setTaskRequirements] = useState<TaskRequirement[]>([]);
   // Excluded tasks for the current week (from Plan Builder)
   const [excludedTasks, setExcludedTasks] = useState<string[]>([]);
 
