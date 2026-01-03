@@ -79,7 +79,11 @@ class HybridStorage implements HybridStorageService {
   }
 
   isCloudEnabled(): boolean {
-    return isSupabaseConfigured && this.cloudStorage.isAvailable();
+    // Only enable cloud sync if:
+    // 1. Supabase is configured
+    // 2. Storage service is available
+    // 3. User is authenticated (has shift_id)
+    return isSupabaseConfigured && this.cloudStorage.isAvailable() && this.shiftId !== null;
   }
 
   getSyncState(): SyncState {
