@@ -251,6 +251,7 @@ export interface Database {
       scheduling_rules: {
         Row: {
           id: string;
+          local_id: string | null;
           shift_id: string;
           algorithm: 'greedy' | 'greedy-tabu' | 'multi-objective' | 'max-matching';
           strict_skill_matching: boolean;
@@ -263,12 +264,15 @@ export interface Database {
           auto_assign_coordinators: boolean;
           randomization_factor: number;
           prioritize_skill_variety: boolean;
+          heavy_tasks: string[];
+          soft_tasks: string[];
           sync_status: string;
           created_at: string;
           updated_at: string;
         };
         Insert: {
           id?: string;
+          local_id?: string | null;
           shift_id: string;
           algorithm?: 'greedy' | 'greedy-tabu' | 'multi-objective' | 'max-matching';
           strict_skill_matching?: boolean;
@@ -281,12 +285,15 @@ export interface Database {
           auto_assign_coordinators?: boolean;
           randomization_factor?: number;
           prioritize_skill_variety?: boolean;
+          heavy_tasks?: string[];
+          soft_tasks?: string[];
           sync_status?: string;
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           id?: string;
+          local_id?: string | null;
           shift_id?: string;
           algorithm?: 'greedy' | 'greedy-tabu' | 'multi-objective' | 'max-matching';
           strict_skill_matching?: boolean;
@@ -299,6 +306,8 @@ export interface Database {
           auto_assign_coordinators?: boolean;
           randomization_factor?: number;
           prioritize_skill_variety?: boolean;
+          heavy_tasks?: string[];
+          soft_tasks?: string[];
           sync_status?: string;
           created_at?: string;
           updated_at?: string;
