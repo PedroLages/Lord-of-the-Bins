@@ -217,6 +217,40 @@ function App() {
     }
   }, [loadingState, initialData, dataInitialized, isFirstTime]);
 
+  // Listen for storage refresh events (after cloud sync) and update state
+  const isFirstRenderAfterInit = useRef(true);
+  useEffect(() => {
+    // Only respond to initialData changes AFTER initial load is complete
+    if (!dataInitialized || !initialData) return;
+
+    // Skip the first run after initialization (that's the normal initialization)
+    if (isFirstRenderAfterInit.current) {
+      isFirstRenderAfterInit.current = false;
+      return;
+    }
+
+    console.log('[App] Storage refresh detected, updating state with cloud data');
+
+    // Update all state from refreshed storage data
+    setOperators(initialData.operators);
+    setTasks(initialData.tasks);
+    setScheduleHistory(initialData.schedules);
+    setTheme(initialData.theme);
+    setSchedulingRules(initialData.schedulingRules);
+    setTaskRequirements(initialData.taskRequirements || []);
+    setSkills(initialData.skills || INITIAL_SKILLS);
+    setAppearance(initialData.appearance || DEFAULT_APPEARANCE_SETTINGS);
+    setFillGapsSettings(initialData.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS);
+
+    // Update current week if it exists in refreshed data
+    setCurrentWeek(prev => {
+      const refreshedSchedule = initialData.schedules[prev.id];
+      return refreshedSchedule || prev;
+    });
+
+    toast.success('Settings synced from cloud');
+  }, [initialData, dataInitialized]);
+
   // Load planning templates when data is initialized
   useEffect(() => {
     if (dataInitialized) {

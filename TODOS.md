@@ -136,6 +136,12 @@
 - [x] Clear all data option (with confirmation)
 - [ ] Database versioning/migrations setup
 - [ ] Compress old schedules (archive schedules older than X weeks)
+- [ ] **Refactor to Dexie's useLiveQuery for reactive storage**
+  - Install `dexie-react-hooks` package
+  - Replace current storage pattern with `useLiveQuery` for reactive queries
+  - Automatically re-render components when IndexedDB data changes
+  - Eliminates need for manual state refresh after cloud sync
+  - See: <https://dexie.org/docs/dexie-react-hooks/useLiveQuery()>
 
 ### P3 - Nice to Have
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Operator, TaskType, WeeklySchedule, TaskRequirement, AppearanceSettings, WeeklyExclusions, FillGapsSettings, PlanningTemplate } from '../types';
 import { DEFAULT_APPEARANCE_SETTINGS, DEFAULT_FILL_GAPS_SETTINGS } from '../types';
 import type { SchedulingRules } from '../services/schedulingService';
-import { storage, hybridStorage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError } from '../services/storage';
+import { storage, hybridStorage, initializeStorage, migrateActivityLogFromLocalStorage, StorageError, STORAGE_REFRESH_EVENT } from '../services/storage';
 import type { AppSettings } from '../services/storage';
 
 /**
@@ -190,6 +190,61 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
     }
 
     init();
+  }, [enabled]);
+
+  // Listen for storage refresh events (e.g., after cloud sync)
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleStorageRefresh = async () => {
+      console.log('[useStorage] Storage refresh event received, reloading data...');
+
+      try {
+        // Reload all data from IndexedDB
+        const [operators, tasks, schedules, taskRequirements, settings] = await Promise.all([
+          storage.getAllOperators(),
+          storage.getAllTasks(),
+          storage.getAllSchedules(),
+          storage.getAllTaskRequirements(),
+          hybridStorage.getSettings(),
+        ]);
+
+        // Convert schedules array to Record
+        const schedulesRecord: Record<string, WeeklySchedule> = {};
+        schedules.forEach(schedule => {
+          schedulesRecord[schedule.id] = schedule;
+        });
+
+        // Update initialData state to trigger re-render
+        setInitialData({
+          operators,
+          tasks,
+          schedules: schedulesRecord,
+          theme: settings?.theme || 'Modern',
+          schedulingRules: settings?.schedulingRules || {} as SchedulingRules,
+          taskRequirements,
+          skills: settings?.skills,
+          appearance: settings?.appearance || DEFAULT_APPEARANCE_SETTINGS,
+          fillGapsSettings: settings?.fillGapsSettings || DEFAULT_FILL_GAPS_SETTINGS,
+        });
+
+        console.log('[useStorage] Data refreshed from storage:', {
+          operators: operators.length,
+          tasks: tasks.length,
+          schedules: schedules.length,
+        });
+      } catch (error) {
+        console.error('[useStorage] Failed to refresh data:', error);
+      }
+    };
+
+    // Add event listener
+    window.addEventListener(STORAGE_REFRESH_EVENT, handleStorageRefresh);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener(STORAGE_REFRESH_EVENT, handleStorageRefresh);
+    };
   }, [enabled]);
 
   // Save methods

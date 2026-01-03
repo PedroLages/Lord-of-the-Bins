@@ -15,6 +15,12 @@ import type { Operator, TaskType, WeeklySchedule, TaskRequirement, PlanningTempl
 import type { SchedulingRules } from '../schedulingService';
 import type { AppSettings } from './database';
 
+/**
+ * Custom event dispatched when cloud data is pulled and merged into IndexedDB
+ * App components can listen to this event to refresh their state
+ */
+export const STORAGE_REFRESH_EVENT = 'storage-refresh';
+
 export interface HybridStorageService {
   // Operators
   getOperators(): Promise<Operator[]>;
@@ -438,6 +444,10 @@ class HybridStorage implements HybridStorageService {
       }
 
       console.log('[HybridStorage] Cloud data merged with local');
+
+      // Dispatch event to notify React components that storage has been refreshed
+      window.dispatchEvent(new CustomEvent(STORAGE_REFRESH_EVENT));
+      console.log('[HybridStorage] Dispatched storage refresh event');
     } catch (error) {
       console.error('[HybridStorage] Failed to pull from cloud:', error);
       throw error;

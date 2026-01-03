@@ -6,7 +6,7 @@
  */
 
 export { storage, IndexedDBStorage } from './indexedDBStorage';
-export { hybridStorage } from './hybridStorage';
+export { hybridStorage, STORAGE_REFRESH_EVENT } from './hybridStorage';
 export type { HybridStorageService } from './hybridStorage';
 export { db, isIndexedDBSupported, getStorageEstimate } from './database';
 export type { AppSettings } from './database';
