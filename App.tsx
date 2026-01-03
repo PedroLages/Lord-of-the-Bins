@@ -285,6 +285,23 @@ function App() {
     }
   }, [fillGapsSettings, dataInitialized, saveFillGapsSettings]);
 
+  // Auto-save skills when they change
+  useEffect(() => {
+    if (dataInitialized && skills.length > 0) {
+      saveSkills(skills);
+    }
+  }, [skills, dataInitialized, saveSkills]);
+
+  // Auto-save task requirements when they change
+  useEffect(() => {
+    if (dataInitialized) {
+      // Save each requirement to storage
+      taskRequirements.forEach(req => {
+        saveTaskRequirement(req);
+      });
+    }
+  }, [taskRequirements, dataInitialized, saveTaskRequirement]);
+
   // Publish Modal State
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishWithLock, setPublishWithLock] = useState(false);

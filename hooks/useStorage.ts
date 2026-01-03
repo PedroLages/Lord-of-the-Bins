@@ -216,7 +216,13 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveTasks = useCallback(async (tasks: TaskType[]) => {
     try {
+      // Save to local storage first (fast bulk operation)
       await storage.saveAllTasks(tasks);
+      // Then sync each task to Supabase individually
+      for (const task of tasks) {
+        await hybridStorage.saveTask(task);
+      }
+      console.log('[Tasks] Saved', tasks.length, 'tasks to cloud');
     } catch (err) {
       console.error('Failed to save tasks:', err);
     }
@@ -224,7 +230,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveTask = useCallback(async (task: TaskType) => {
     try {
-      await storage.saveTask(task);
+      // Use hybridStorage to sync tasks to Supabase
+      await hybridStorage.saveTask(task);
+      console.log('[Task] Saved to cloud:', task.name);
     } catch (err) {
       console.error('Failed to save task:', err);
     }
@@ -232,7 +240,9 @@ export function useStorage(options: { enabled?: boolean } = {}): UseStorageResul
 
   const saveSchedule = useCallback(async (schedule: WeeklySchedule) => {
     try {
-      await storage.saveSchedule(schedule);
+      // Use hybridStorage to sync schedules to Supabase
+      await hybridStorage.saveSchedule(schedule);
+      console.log('[Schedule] Saved to cloud:', schedule.id);
     } catch (err) {
       console.error('Failed to save schedule:', err);
     }
