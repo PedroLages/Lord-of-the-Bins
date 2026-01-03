@@ -307,13 +307,14 @@ class HybridStorage implements HybridStorageService {
 
     // 2. Queue for cloud sync (non-blocking)
     if (this.isCloudEnabled()) {
-      queueSync('planning_templates', 'update', template.id, {
+      queueSync('planning_templates', 'upsert', template.id, {
         local_id: template.id,
         shift_id: this.shiftId,
         name: template.name,
         description: template.description || null,
         exclusions: template.exclusions || [],
         rules: template.rules || [],
+        created_at: template.createdAt,
       });
     }
   }

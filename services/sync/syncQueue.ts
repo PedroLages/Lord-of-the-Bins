@@ -15,6 +15,7 @@ const ALLOWED_TABLES = [
   'schedules',
   'task_requirements',
   'scheduling_rules',
+  'planning_templates',
   'app_settings',
   'activity_log'
 ] as const;
