@@ -102,7 +102,7 @@ export function getSyncState(): SyncState {
  */
 export async function queueSync(
   table: string,
-  operation: 'insert' | 'update' | 'delete',
+  operation: 'insert' | 'update' | 'delete' | 'upsert',
   localId: string,
   data: Record<string, unknown>
 ): Promise<void> {
@@ -251,6 +251,18 @@ async function processQueueItem(
         .from(table)
         .update(data)
         .eq('local_id', item.localId);
+      if (error) throw new Error(error.message);
+      break;
+    }
+    case 'upsert': {
+      // Upsert: insert if doesn't exist, update if exists
+      // Use local_id as the unique identifier for conflict resolution
+      const { error } = await (supabase as any)
+        .from(table)
+        .upsert(data, {
+          onConflict: 'local_id',
+          ignoreDuplicates: false,
+        });
       if (error) throw new Error(error.message);
       break;
     }

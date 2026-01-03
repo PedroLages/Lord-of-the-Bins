@@ -228,7 +228,8 @@ class HybridStorage implements HybridStorageService {
 
     // Sync settings to cloud for multi-device support
     if (this.isCloudEnabled() && settings.schedulingRules) {
-      queueSync('scheduling_rules', 'update', 'rules', {
+      queueSync('scheduling_rules', 'upsert', 'rules', {
+        local_id: 'rules',
         shift_id: this.shiftId,
         algorithm: settings.schedulingRules.algorithm,
         strict_skill_matching: settings.schedulingRules.strictSkillMatching,
@@ -261,7 +262,8 @@ class HybridStorage implements HybridStorageService {
       });
 
       if (this.isCloudEnabled()) {
-        queueSync('scheduling_rules', 'update', 'rules', {
+        queueSync('scheduling_rules', 'upsert', 'rules', {
+          local_id: 'rules',
           shift_id: this.shiftId,
           algorithm: rules.algorithm,
           strict_skill_matching: rules.strictSkillMatching,
