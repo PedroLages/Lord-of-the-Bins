@@ -67,23 +67,43 @@ class HybridStorage implements HybridStorageService {
   /**
    * Set the current shift ID for cloud operations
    */
-  setShiftId(shiftId: string) {
+  async setShiftId(shiftId: string) {
     this.shiftId = shiftId;
     this.cloudStorage.setShiftId(shiftId);
 
-    // Trigger sync queue processing after authentication
-    // This ensures pending items sync immediately when user logs in
+    // After authentication, pull data from cloud and sync pending items
     if (shiftId && isSupabaseConfigured) {
-      setTimeout(() => retrySyncQueue(), 100);
+      setTimeout(async () => {
+        try {
+          // First, pull any existing data from cloud
+          console.log('[Auth] Pulling data from cloud after authentication...');
+          await this.pullFromCloud();
+          console.log('[Auth] Successfully pulled data from cloud');
+        } catch (error) {
+          console.error('[Auth] Failed to pull from cloud:', error);
+          // Continue anyway - data might not exist yet
+        }
+
+        // Then process any pending sync items
+        retrySyncQueue();
+      }, 100);
     }
   }
 
+  /**
+   * Check if cloud storage is available for READ operations
+   * (doesn't require authentication)
+   */
+  isCloudAvailable(): boolean {
+    return isSupabaseConfigured && this.cloudStorage.isAvailable();
+  }
+
+  /**
+   * Check if cloud sync is enabled for WRITE operations
+   * (requires authentication with shift_id)
+   */
   isCloudEnabled(): boolean {
-    // Only enable cloud sync if:
-    // 1. Supabase is configured
-    // 2. Storage service is available
-    // 3. User is authenticated (has shift_id)
-    return isSupabaseConfigured && this.cloudStorage.isAvailable() && this.shiftId !== null;
+    return this.isCloudAvailable() && this.shiftId !== null;
   }
 
   getSyncState(): SyncState {
