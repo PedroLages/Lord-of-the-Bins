@@ -1,6 +1,6 @@
 import { MOCK_OPERATORS, MOCK_TASKS, AppearanceSettings, FillGapsSettings } from '../../types';
 import { DEFAULT_RULES } from '../schedulingService';
-import { storage } from './index';
+import { storage, hybridStorage } from './index';
 import { db } from './database';
 import type { AppSettings } from './database';
 import type { Operator, TaskType, WeeklySchedule } from '../../types';
@@ -51,7 +51,20 @@ export async function initializeStorage(): Promise<InitResult> {
     await runMigrations();
   }
 
-  // Load all data
+  // Pull data from Supabase cloud if available (before loading from IndexedDB)
+  // This ensures settings and data are restored after clearing browser storage
+  if (hybridStorage.isCloudEnabled()) {
+    try {
+      console.log('[Init] Pulling data from Supabase cloud...');
+      await hybridStorage.pullFromCloud();
+      console.log('[Init] Successfully synced from cloud');
+    } catch (error) {
+      console.error('[Init] Failed to pull from cloud, using local data:', error);
+      // Continue with local data - don't block initialization
+    }
+  }
+
+  // Load all data (now includes cloud-synced data if available)
   const [operators, tasks, allSchedules, settings] = await Promise.all([
     storage.getAllOperators(),
     storage.getAllTasks(),
