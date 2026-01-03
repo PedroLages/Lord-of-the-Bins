@@ -387,6 +387,8 @@ export class SupabaseStorageService {
       randomizationFactor: rules.randomization_factor,
       prioritizeSkillVariety: rules.prioritize_skill_variety,
       useV2Algorithm: false,
+      heavyTasks: rules.heavy_tasks || [],
+      softTasks: rules.soft_tasks || [],
     };
   }
 
